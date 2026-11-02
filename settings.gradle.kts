@@ -22,6 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Myzuoye"
+rootProject.name = "pTp"
 include(":app")
- 

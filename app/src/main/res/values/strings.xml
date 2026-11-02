@@ -1,3 +1,29 @@
 <resources>
-    <string name="app_name">Myzuoye</string>
+    <string name="app_name">pTp</string>
+    <string name="photo1_name">HelloKito</string>
+
+    <string name="p2p_state_init">Wi-Fi Direct 初始化中…</string>
+    <string name="p2p_state_ready">Wi-Fi Direct 已就绪</string>
+    <string name="p2p_state_off">Wi-Fi 已关闭，请先打开 Wi-Fi</string>
+    <string name="p2p_state_no_permission">未授予“附近设备”权限</string>
+    <string name="p2p_state_unsupported">本机不支持 Wi-Fi Direct</string>
+    <string name="p2p_state_searching">正在搜索附近设备…</string>
+    <string name="p2p_state_connecting">正在连接…</string>
+    <string name="p2p_state_connected">已连接</string>
+
+    <string name="self_unknown">本机：—</string>
+    <string name="role_unknown">角色：—</string>
+    <string name="self_info">本机：%1$s</string>
+    <string name="role_info">角色：%1$s　组主地址：%2$s</string>
+
+    <string name="nearby_devices_zero">附近设备（0）</string>
+    <string name="nearby_devices">附近设备（%1$d）</string>
+
+    <string name="action_discover">搜索设备</string>
+    <string name="action_create_group">创建组</string>
+    <string name="action_disconnect">断开</string>
+
+    <string name="dialog_permission_title">需要“附近设备”权限</string>
+    <string name="dialog_permission_message">搜索和连接附近设备依赖“附近设备”权限，请到系统设置中手动开启后返回本页。</string>
+    <string name="action_go_settings">去设置</string>
 </resources>
