@@ -11,7 +11,10 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.view.View
 import android.widget.Button
+import android.widget.EditText
+import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
@@ -22,13 +25,14 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.ptp.p2p.P2pController
+import com.example.ptp.transfer.TransferManager
 import com.example.ptp.ui.DeviceAdapter
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 /**
- * M1：打通 Wi-Fi Direct 链路 —— 授权 → 搜索 → 连接 → 显示角色与组主地址。
- * 传输层不在本阶段范围内。
+ * M1：授权 → 搜索 → 连接 → 显示角色与组主地址。
+ * M2：建立连接后自动拉起 TCP 文本通道（组主监听、客户端连接），双向互发文本。
  */
 class MainActivity : AppCompatActivity() {
 
@@ -44,6 +48,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnDiscover: Button
     private lateinit var btnCreateGroup: Button
     private lateinit var btnDisconnect: Button
+
+    private lateinit var tvChannelState: TextView
+    private lateinit var tvChat: TextView
+    private lateinit var svChat: ScrollView
+    private lateinit var etMessage: EditText
+    private lateinit var btnSend: Button
 
     private val logLines = ArrayDeque<String>()
     private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
@@ -94,7 +104,12 @@ class MainActivity : AppCompatActivity() {
 
         btnDiscover.setOnClickListener { startDiscovery(force = true) }
         btnCreateGroup.setOnClickListener { controller.createGroup() }
-        btnDisconnect.setOnClickListener { controller.disconnect() }
+        btnDisconnect.setOnClickListener {
+            controller.disconnect()
+            TransferManager.stop()
+        }
+        btnSend.setOnClickListener { sendMessage() }
+        btnSend.isEnabled = false
 
         if (!controller.isSupported) {
             tvP2pState.setText(R.string.p2p_state_unsupported)
@@ -106,6 +121,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+
+        // 通道回调只在界面可见时挂载，避免 Activity 泄漏
+        TransferManager.onStateChanged = { state, message -> renderChannelState(state, message) }
+        TransferManager.onMessage = { line -> appendChat(line) }
+        renderChat()
+        renderChannelState(TransferManager.state, "")
+
         if (!controller.isSupported) return
 
         controller.start()
@@ -124,11 +146,15 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         controller.stop()
+        TransferManager.onStateChanged = null
+        TransferManager.onMessage = null
     }
 
     override fun onDestroy() {
         super.onDestroy()
         controller.release()
+        // 只有真正退出界面才断开通道，旋转屏幕时保持连接
+        if (isFinishing) TransferManager.stop()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -148,6 +174,12 @@ class MainActivity : AppCompatActivity() {
         btnDiscover = findViewById(R.id.btnDiscover)
         btnCreateGroup = findViewById(R.id.btnCreateGroup)
         btnDisconnect = findViewById(R.id.btnDisconnect)
+
+        tvChannelState = findViewById(R.id.tvChannelState)
+        tvChat = findViewById(R.id.tvChat)
+        svChat = findViewById(R.id.svChat)
+        etMessage = findViewById(R.id.etMessage)
+        btnSend = findViewById(R.id.btnSend)
     }
 
     private fun applyWindowInsets() {
@@ -187,8 +219,15 @@ class MainActivity : AppCompatActivity() {
 
         controller.onConnectionInfo = { info -> onConnected(info) }
 
+        controller.onGroupCreated = {
+            // 已知自己是组主，提前监听，减少对方连上来时的等待
+            TransferManager.startServer()
+        }
+
         controller.onDisconnected = {
             tvRoleInfo.setText(R.string.role_unknown)
+            // 这里不主动关通道：P2P 链路断开时 socket 会自己报错退出，
+            // 而组主的监听保留下来，下次重新组网可以直接复用。
         }
 
         controller.onDiscoveryChanged = { discovering ->
@@ -278,12 +317,82 @@ class MainActivity : AppCompatActivity() {
         tvP2pState.setText(R.string.p2p_state_connected)
         tvRoleInfo.text = getString(R.string.role_info, role, groupOwnerIp)
         log("连接成功：$role，组主地址 $groupOwnerIp")
+
+        // M2：组网完成后立刻拉起 TCP 通道
+        if (info.isGroupOwner) {
+            TransferManager.startServer()
+        } else {
+            val host = info.groupOwnerAddress?.hostAddress
+            if (host.isNullOrBlank()) {
+                log("组主地址未知，无法建立文本通道")
+            } else {
+                TransferManager.connect(host)
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ 文本通道
+
+    private fun sendMessage() {
+        val text = etMessage.text.toString().trim()
+        if (text.isEmpty()) return
+        if (!TransferManager.isConnected) {
+            toast(getString(R.string.channel_not_ready))
+            return
+        }
+        if (TransferManager.send(text)) {
+            etMessage.setText("")
+        } else {
+            toast(getString(R.string.channel_not_ready))
+        }
+    }
+
+    private fun renderChannelState(state: TransferManager.State, message: String) {
+        if (message.isNotBlank()) log(message)
+
+        tvChannelState.setText(
+            when (state) {
+                TransferManager.State.IDLE -> R.string.channel_idle
+                TransferManager.State.LISTENING -> R.string.channel_listening
+                TransferManager.State.CONNECTING -> R.string.channel_connecting
+                TransferManager.State.CONNECTED -> R.string.channel_connected
+                TransferManager.State.ERROR -> R.string.channel_error
+            }
+        )
+        btnSend.isEnabled = state == TransferManager.State.CONNECTED
+    }
+
+    private fun renderChat() {
+        val lines = TransferManager.history()
+        tvChat.text = if (lines.isEmpty()) {
+            getString(R.string.chat_empty)
+        } else {
+            lines.joinToString("\n")
+        }
+        scrollChatToBottom()
+    }
+
+    private fun appendChat(line: String) {
+        if (tvChat.text.toString() == getString(R.string.chat_empty)) {
+            tvChat.text = line
+        } else {
+            tvChat.append("\n$line")
+        }
+        scrollChatToBottom()
+    }
+
+    private fun scrollChatToBottom() {
+        svChat.post { svChat.fullScroll(View.FOCUS_DOWN) }
     }
 
     // ------------------------------------------------------------------ 工具
 
     private fun displayName(device: WifiP2pDevice): String =
         device.deviceName.ifBlank { device.deviceAddress.ifBlank { "未知设备" } }
+
+    private fun toast(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    }
 
     private fun log(message: String) {
         logLines.addLast("${LocalTime.now().format(timeFormatter)}  $message")
@@ -294,6 +403,6 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         const val KEY_PERMISSION_ASKED = "permission_asked"
         const val DISCOVER_DEBOUNCE_MS = 1000L
-        const val MAX_LOG_LINES = 6
+        const val MAX_LOG_LINES = 4
     }
 }

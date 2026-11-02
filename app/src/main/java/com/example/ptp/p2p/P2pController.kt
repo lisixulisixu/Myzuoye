@@ -39,6 +39,9 @@ class P2pController(context: Context) {
     /** 组已断开 */
     var onDisconnected: (() -> Unit)? = null
 
+    /** 主动建组成功（本机确定成为组主），可用于提前启动 TCP 监听 */
+    var onGroupCreated: (() -> Unit)? = null
+
     /** 本机设备信息更新 */
     var onThisDeviceChanged: ((WifiP2pDevice) -> Unit)? = null
 
@@ -225,6 +228,7 @@ class P2pController(context: Context) {
             mgr.createGroup(ch, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() {
                     log("已创建分组，本机为组主，等待对方连接…")
+                    onGroupCreated?.invoke()
                     requestConnectionInfo()
                 }
 

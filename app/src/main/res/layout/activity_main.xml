@@ -12,7 +12,7 @@
     <ImageView
         android:id="@+id/ivCover"
         android:layout_width="match_parent"
-        android:layout_height="140dp"
+        android:layout_height="96dp"
         android:contentDescription="@string/photo1_name"
         android:scaleType="centerCrop"
         app:srcCompat="@drawable/p1" />
@@ -22,23 +22,23 @@
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:paddingHorizontal="16dp"
-        android:paddingTop="14dp">
+        android:paddingTop="12dp">
 
         <TextView
             android:id="@+id/tvP2pState"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/p2p_state_init"
-            android:textSize="17sp"
+            android:textSize="16sp"
             android:textStyle="bold" />
 
         <TextView
             android:id="@+id/tvSelfInfo"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
+            android:layout_marginTop="5dp"
             android:text="@string/self_unknown"
-            android:textSize="13sp" />
+            android:textSize="12sp" />
 
         <TextView
             android:id="@+id/tvRoleInfo"
@@ -46,7 +46,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
             android:text="@string/role_unknown"
-            android:textSize="13sp" />
+            android:textSize="12sp" />
     </LinearLayout>
 
     <LinearLayout
@@ -54,7 +54,7 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:paddingHorizontal="12dp"
-        android:paddingTop="10dp">
+        android:paddingTop="8dp">
 
         <Button
             android:id="@+id/btnDiscover"
@@ -64,6 +64,7 @@
             android:layout_weight="1"
             android:insetTop="0dp"
             android:insetBottom="0dp"
+            android:minHeight="40dp"
             android:paddingHorizontal="4dp"
             android:text="@string/action_discover"
             android:textSize="13sp" />
@@ -76,6 +77,7 @@
             android:layout_weight="1"
             android:insetTop="0dp"
             android:insetBottom="0dp"
+            android:minHeight="40dp"
             android:paddingHorizontal="4dp"
             android:text="@string/action_create_group"
             android:textSize="13sp" />
@@ -88,6 +90,7 @@
             android:layout_weight="1"
             android:insetTop="0dp"
             android:insetBottom="0dp"
+            android:minHeight="40dp"
             android:paddingHorizontal="4dp"
             android:text="@string/action_disconnect"
             android:textSize="13sp" />
@@ -98,29 +101,97 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:paddingHorizontal="16dp"
-        android:paddingTop="14dp"
-        android:paddingBottom="4dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="2dp"
         android:text="@string/nearby_devices_zero"
-        android:textSize="13sp" />
+        android:textSize="12sp" />
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rvDevices"
         android:layout_width="match_parent"
         android:layout_height="0dp"
+        android:layout_marginHorizontal="8dp"
         android:layout_weight="1"
         android:clipToPadding="false"
-        android:paddingBottom="8dp"
+        android:minHeight="72dp"
         android:scrollbars="vertical" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="12dp"
+        android:layout_marginTop="4dp"
+        android:background="@drawable/bg_panel"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <TextView
+            android:id="@+id/tvChannelState"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/channel_idle"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <ScrollView
+            android:id="@+id/svChat"
+            android:layout_width="match_parent"
+            android:layout_height="84dp"
+            android:layout_marginTop="6dp">
+
+            <TextView
+                android:id="@+id/tvChat"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:lineSpacingExtra="2dp"
+                android:text="@string/chat_empty"
+                android:textSize="12sp" />
+        </ScrollView>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/etMessage"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="@string/hint_message"
+                android:importantForAutofill="no"
+                android:inputType="text"
+                android:maxLines="1"
+                android:minHeight="40dp"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/btnSend"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minHeight="40dp"
+                android:minWidth="64dp"
+                android:text="@string/action_send"
+                android:textSize="13sp" />
+        </LinearLayout>
+    </LinearLayout>
 
     <TextView
         android:id="@+id/tvLog"
         android:layout_width="match_parent"
-        android:layout_height="108dp"
-        android:layout_margin="12dp"
+        android:layout_height="76dp"
+        android:layout_marginHorizontal="12dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="10dp"
         android:background="@drawable/bg_log"
         android:fontFamily="monospace"
         android:gravity="bottom"
-        android:padding="10dp"
+        android:padding="8dp"
         android:textSize="11sp" />
 
 </LinearLayout>

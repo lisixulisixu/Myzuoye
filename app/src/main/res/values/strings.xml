@@ -22,6 +22,16 @@
     <string name="action_discover">搜索设备</string>
     <string name="action_create_group">创建组</string>
     <string name="action_disconnect">断开</string>
+    <string name="action_send">发送</string>
+
+    <string name="channel_idle">文本通道：未建立</string>
+    <string name="channel_listening">文本通道：监听中，等待对方接入</string>
+    <string name="channel_connecting">文本通道：正在连接…</string>
+    <string name="channel_connected">文本通道：已连接</string>
+    <string name="channel_error">文本通道：出错</string>
+    <string name="chat_empty">（暂无消息，P2P 连上后即可互发文本）</string>
+    <string name="hint_message">输入要发送的文字</string>
+    <string name="channel_not_ready">文本通道还没建立</string>
 
     <string name="dialog_permission_title">需要“附近设备”权限</string>
     <string name="dialog_permission_message">搜索和连接附近设备依赖“附近设备”权限，请到系统设置中手动开启后返回本页。</string>
