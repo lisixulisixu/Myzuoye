@@ -135,6 +135,12 @@ class MainActivity : AppCompatActivity() {
         btnSend.isEnabled = false
         btnPickFile.setOnClickListener { pickFile() }
 
+        // 调试入口：长按通道状态可手动起监听 / 连接，不依赖 P2P（模拟器可测）
+        tvChannelState.setOnLongClickListener {
+            showChannelDebugMenu()
+            true
+        }
+
         if (!controller.isSupported) {
             tvP2pState.setText(R.string.p2p_state_unsupported)
             btnDiscover.isEnabled = false
@@ -372,6 +378,71 @@ class MainActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------------ 文本通道
 
+    /**
+     * 文本通道调试菜单（长按通道状态触发）。
+     *
+     * 用途：不依赖 Wi-Fi Direct，直接在本机起监听或连一个地址。
+     * 两个模拟器上配合 `adb forward` 即可完整验证文本通道与文件传输：
+     * ```
+     * # A 机点“仅本地监听”
+     * adb -s emulator-5554 forward tcp:18988 tcp:8988
+     * # B 机点“手动连接”，输入 10.0.2.2:18988
+     * ```
+     */
+    private fun showChannelDebugMenu() {
+        val items = arrayOf("仅本地监听（调试）", "手动连接…（调试）", "清空聊天记录")
+        AlertDialog.Builder(this)
+            .setTitle(R.string.channel_debug_title)
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> {
+                        TransferManager.stop()
+                        TransferManager.startServer()
+                        log("调试：开始监听 ${TransferManager.port}")
+                    }
+
+                    1 -> showManualConnectDialog()
+
+                    2 -> {
+                        TransferManager.clearHistory()
+                        renderChat()
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun showManualConnectDialog() {
+        val input = EditText(this).apply {
+            hint = getString(R.string.channel_debug_host_hint)
+            setText(DEFAULT_DEBUG_HOST)
+            setSelectAllOnFocus(true)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.channel_debug_connect)
+            .setView(input)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val text = input.text.toString().trim()
+                if (text.isEmpty()) return@setPositiveButton
+                val host: String
+                val port: Int
+                val parts = text.split(":")
+                if (parts.size == 2) {
+                    host = parts[0]
+                    port = parts[1].toIntOrNull() ?: TransferManager.port
+                } else {
+                    host = text
+                    port = TransferManager.port
+                }
+                TransferManager.stop()
+                log("调试：连接 $host:$port")
+                TransferManager.connect(host, port)
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
     private fun sendMessage() {
         val text = etMessage.text.toString().trim()
         if (text.isEmpty()) return
@@ -467,25 +538,28 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val uri = pendingUri ?: return
-        try {
-            val input = contentResolver.openInputStream(uri) ?: run {
-                toast(getString(R.string.transfer_pick))
-                return
-            }
-            val ok = TransferManager.sendFile(input, pendingName, pendingSize)
-            if (!ok) {
-                toast(getString(R.string.transfer_busy))
-            }
-        } catch (e: Exception) {
-            log("打开文件失败：${e.message}")
-            toast(getString(R.string.transfer_pick))
+
+        // 传“流工厂”：发送端要先算 MD5 再重新打开流发数据，
+        // 只传一个流会导致 MD5 读完就 EOF，实际发出 0 字节。
+        val ok = TransferManager.sendFile(
+            openStream = { runCatching { contentResolver.openInputStream(uri) }.getOrNull() },
+            fileName = pendingName,
+            fileSize = pendingSize
+        )
+        if (!ok) {
+            toast(getString(R.string.transfer_busy))
         }
     }
 
     private fun renderReceiveProgress(progress: Float) {
         val percent = (progress * 100).toInt()
         pbTransfer.progress = percent
-        tvTransferState.text = getString(R.string.transfer_receiving, percent)
+        // transfer_receiving 需要两个参数（文件名 + 百分比），缺一就会抛
+        // MissingFormatArgumentException 直接崩溃，这里必须都传齐。
+        val name = TransferManager.receivingFileName.ifBlank {
+            getString(R.string.transfer_unknown_file)
+        }
+        tvTransferState.text = getString(R.string.transfer_receiving, name, percent)
     }
 
     private fun renderReceiveDone(path: String?) {
@@ -531,5 +605,8 @@ class MainActivity : AppCompatActivity() {
         const val KEY_PERMISSION_ASKED = "permission_asked"
         const val DISCOVER_DEBOUNCE_MS = 1000L
         const val MAX_LOG_LINES = 4
+
+        /** 模拟器里 10.0.2.2 指向宿主机；配合 adb forward 即可跨模拟器联调 */
+        const val DEFAULT_DEBUG_HOST = "10.0.2.2:8988"
     }
 }

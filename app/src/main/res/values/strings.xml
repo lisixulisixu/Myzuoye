@@ -43,6 +43,7 @@
     <string name="transfer_received_done">已保存到：%1$s</string>
     <string name="transfer_received_fail">接收失败或校验未通过</string>
     <string name="transfer_busy">已有文件在传输，请稍候</string>
+    <string name="transfer_unknown_file">文件</string>
 
     <string name="dialog_permission_title">需要“附近设备”权限</string>
     <string name="dialog_permission_message">搜索和连接附近设备依赖“附近设备”权限，请到系统设置中手动开启后返回本页。</string>
@@ -52,4 +53,9 @@
     <string name="notif_channel_name">文件传输</string>
     <string name="notif_transferring">正在传输文件</string>
     <string name="notif_idle">连接空闲</string>
+
+    <!-- 文本通道调试入口（长按通道状态触发） -->
+    <string name="channel_debug_title">文本通道（调试）</string>
+    <string name="channel_debug_connect">手动连接</string>
+    <string name="channel_debug_host_hint">host:port，如 10.0.2.2:8988</string>
 </resources>

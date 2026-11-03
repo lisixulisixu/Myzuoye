@@ -106,6 +106,14 @@ object TransferManager {
     private var receiveTotal: Long = 0
     private var receiveMd5: String = ""
 
+    /** 本次文件因故（头解析失败 / 建文件失败 / 写盘失败）已放弃，后续分片直接丢弃 */
+    private var receiveDiscarding = false
+
+    /** 当前正在接收的文件名，供界面显示进度文案 */
+    @Volatile
+    var receivingFileName: String = ""
+        private set
+
     /** 是否正在发送文件 */
     @Volatile
     private var sending = false
@@ -119,6 +127,10 @@ object TransferManager {
 
     val isConnected: Boolean get() = state == State.CONNECTED
 
+    /** 当前监听 / 连接使用的端口（默认 [TransferProtocol.PORT]） */
+    var port: Int = TransferProtocol.PORT
+        private set
+
     /** 历史消息（最多保留 [MAX_HISTORY] 条），界面重建时用它恢复聊天区 */
     fun history(): List<String> = synchronized(messageBuffer) { messageBuffer.toList() }
 
@@ -130,6 +142,7 @@ object TransferManager {
     fun startServer(port: Int = TransferProtocol.PORT) {
         if (listening) return
 
+        this.port = port
         listening = true
         listenJob = scope.launch {
             var ss: ServerSocket? = null
@@ -187,6 +200,7 @@ object TransferManager {
         if (state == State.CONNECTED) return
         if (connectJob?.isActive == true) return
 
+        this.port = port
         connectJob = scope.launch {
             var lastError: Exception? = null
             repeat(attempts) { index ->
@@ -292,7 +306,9 @@ object TransferManager {
 
                     TransferProtocol.TYPE_FILE_CANCEL -> handleFileCancel()
 
-                    else -> emit(State.ERROR, "收到未知帧类型：${frame.type}")
+                    // 未知帧只记日志，不能把整个通道判为 ERROR——
+                    // 否则连接还在、发送按钮却被禁用，属于误伤。
+                    else -> appendAndNotify("收到未知帧类型：${frame.type}，已忽略")
                 }
             }
         } catch (e: CancellationException) {
@@ -304,7 +320,9 @@ object TransferManager {
             output = null
             socket = null
             runCatching { client.close() }
-            if (state == State.CONNECTED) emit(State.IDLE, "通道已断开")
+            // 无条件复位：即使中途被标成 ERROR，断开后也要回到 IDLE，
+            // 否则界面会一直卡在“出错”且无法重连。
+            if (state != State.IDLE) emit(State.IDLE, "通道已断开")
         }
     }
 
@@ -312,7 +330,8 @@ object TransferManager {
 
     private fun handleFileHeader(frame: TransferProtocol.Frame) {
         val header = runCatching { frame.asFileHeader() }.getOrElse {
-            emit(State.ERROR, "文件头解析失败：${it.message}")
+            appendAndNotify("文件头解析失败，已忽略本次传输：${it.message}")
+            receiveDiscarding = true
             return
         }
 
@@ -323,12 +342,15 @@ object TransferManager {
         val stream = try {
             FileOutputStream(file)
         } catch (e: Exception) {
-            emit(State.ERROR, "无法创建接收文件：${e.message}")
+            appendAndNotify("无法创建接收文件，已忽略本次传输：${e.message}")
+            receiveDiscarding = true
             return
         }
 
         receiveFile = file
         receiveStream = stream
+        receiveDiscarding = false
+        receivingFileName = header.fileName
         receiveTotal = header.fileSize
         receiveRemaining = header.fileSize
         receiveMd5 = header.md5Hex
@@ -339,8 +361,12 @@ object TransferManager {
     }
 
     private fun handleFileChunk(frame: TransferProtocol.Frame) {
+        // 已放弃本次传输：继续丢弃分片，直到收到结束帧
+        if (receiveDiscarding) return
+
         val stream = receiveStream ?: run {
-            emit(State.ERROR, "收到分片但未收到文件头")
+            appendAndNotify("收到分片但未收到文件头，已忽略")
+            receiveDiscarding = true
             return
         }
         try {
@@ -356,14 +382,28 @@ object TransferManager {
             mainHandler.post { onReceiveProgress?.invoke(progress.coerceIn(0f, 1f)) }
             updateService("接收中 ${pct}%", pct, 100)
         } catch (e: Exception) {
-            emit(State.ERROR, "写入文件失败：${e.message}")
+            // 写盘失败只放弃本次文件，不把连接判为 ERROR
+            appendAndNotify("写入文件失败，放弃本次接收：${e.message}")
             abortReceive()
+            receiveDiscarding = true
+            stopService()
+            mainHandler.post { onReceiveDone?.invoke(null) }
         }
     }
 
     private fun handleFileEnd(frame: TransferProtocol.Frame, out: DataOutputStream) {
         val received = runCatching { frame.asLong() }.getOrElse {
-            emit(State.ERROR, "结束帧解析失败：${it.message}")
+            appendAndNotify("结束帧解析失败：${it.message}")
+            abortReceive()
+            return
+        }
+
+        if (receiveDiscarding) {
+            // 本次传输已被放弃，收到结束帧就把标记清掉，连接保持
+            abortReceive()
+            appendAndNotify("本次文件传输已放弃")
+            mainHandler.post { onReceiveDone?.invoke(null) }
+            stopService()
             return
         }
 
@@ -371,33 +411,40 @@ object TransferManager {
         val stream = receiveStream
         receiveFile = null
         receiveStream = null
+        receivingFileName = ""
         runCatching { stream?.close() }
 
         if (file == null) {
-            emit(State.ERROR, "收到结束帧但没有正在接收的文件")
+            appendAndNotify("收到结束帧但没有正在接收的文件，已忽略")
             return
         }
 
         // 完整性核对
-        val ok = file.length() == received && file.length() == receiveTotal &&
-            if (receiveMd5.isNotEmpty()) {
-                file.inputStream().use { Checksum.md5Hex(it) == receiveMd5 }
-            } else {
-                true
+        // 注意：协议里 MD5 以大写十六进制传输，而 Checksum.md5Hex 返回小写，
+        // 必须忽略大小写比较，否则永远不相等。
+        val sizeOk = file.length() == received && file.length() == receiveTotal
+        val md5Ok = if (receiveMd5.isNotEmpty()) {
+            file.inputStream().use {
+                Checksum.md5Hex(it).equals(receiveMd5, ignoreCase = true)
             }
+        } else {
+            true
+        }
+        val ok = sizeOk && md5Ok
 
         val donePath = if (ok) file.absolutePath else null
         if (ok) {
             appendAndNotify("文件接收完成：${file.name}")
             mainHandler.post { onReceiveDone?.invoke(donePath) }
-            stopService()
         } else {
-            appendAndNotify("文件校验失败，已丢弃")
+            appendAndNotify(
+                "文件校验失败，已丢弃（大小 $sizeOk，MD5 $md5Ok，" +
+                    "收到 ${file.length()} / 声明 $receiveTotal / 结束帧 $received）"
+            )
             runCatching { file.delete() }
-            emit(State.ERROR, "文件校验失败（大小或 MD5 不匹配）")
             mainHandler.post { onReceiveDone?.invoke(null) }
-            stopService()
         }
+        stopService()
     }
 
     private fun handleFileCancel() {
@@ -407,6 +454,7 @@ object TransferManager {
             runCatching { file.delete() }
             appendAndNotify("对方取消了传输")
             mainHandler.post { onReceiveDone?.invoke(null) }
+            stopService()
         }
     }
 
@@ -417,6 +465,8 @@ object TransferManager {
         receiveRemaining = 0
         receiveTotal = 0
         receiveMd5 = ""
+        receiveDiscarding = false
+        receivingFileName = ""
     }
 
     // ------------------------------------------------------------------ 文件发送
@@ -424,9 +474,17 @@ object TransferManager {
     /**
      * 发送一个文件。调用方保证已连接。
      *
+     * 传的是「流工厂」而不是现成的流：计算 MD5 会把流读到末尾，
+     * 必须能重新打开一份新的流来真正发数据，否则会发出 0 字节。
+     *
+     * @param openStream 每次调用返回一份从头发起的新流（调用方负责关闭）
      * @return true 表示已开始发送；false 表示通道不可用或已有任务在跑
      */
-    fun sendFile(input: InputStream, fileName: String, fileSize: Long): Boolean {
+    fun sendFile(
+        openStream: () -> InputStream?,
+        fileName: String,
+        fileSize: Long
+    ): Boolean {
         if (!isConnected) return false
         if (sending) return false
 
@@ -442,37 +500,55 @@ object TransferManager {
             }
 
             try {
-                val md5 = Checksum.md5Hex(input)
+                // 第一遍：算 MD5，同时拿到真实的字节数（SAF 的 SIZE 可能是 -1）
+                val digest = openStream()?.use { Checksum.digestOf(it) }
+                if (digest == null) {
+                    appendAndNotify("无法读取文件：$fileName")
+                    mainHandler.post { onSendDone?.invoke(false) }
+                    stopService()
+                    sending = false
+                    return@launch
+                }
+                val realSize = digest.size
 
-                // 重新打开一份流做实际发送（md5 计算已把流读到末尾）
-                val stream = input
-                val header = TransferProtocol.FileHeader(fileName, fileSize, md5)
+                val header = TransferProtocol.FileHeader(fileName, realSize, digest.md5Hex)
                 synchronized(writeLock) { TransferProtocol.writeFileHeader(out, header) }
 
-                val buffer = ByteArray(TransferProtocol.CHUNK_SIZE)
+                // 第二遍：重新打开一份流，从头读并发送
                 var sent = 0L
-                while (currentCoroutineContext().isActive) {
-                    val read = stream.read(buffer)
-                    if (read < 0) break
-                    val chunk = if (read == buffer.size) buffer else buffer.copyOf(read)
-                    synchronized(writeLock) { TransferProtocol.writeFileChunk(out, chunk) }
-                    sent += read
-                    val pct = if (fileSize > 0) ((sent.toFloat() / fileSize.toFloat()).coerceIn(0f, 1f) * 100).toInt() else 100
-                    mainHandler.post {
-                        onSendProgress?.invoke(
-                            if (fileSize > 0) (sent.toFloat() / fileSize.toFloat()).coerceIn(0f, 1f) else 1f
-                        )
+                openStream()?.use { stream ->
+                    val buffer = ByteArray(TransferProtocol.CHUNK_SIZE)
+                    while (currentCoroutineContext().isActive) {
+                        val read = stream.read(buffer)
+                        if (read < 0) break
+                        val chunk = if (read == buffer.size) buffer else buffer.copyOf(read)
+                        synchronized(writeLock) { TransferProtocol.writeFileChunk(out, chunk) }
+                        sent += read
+                        val ratio = if (realSize > 0) {
+                            (sent.toFloat() / realSize.toFloat()).coerceIn(0f, 1f)
+                        } else {
+                            1f
+                        }
+                        val pct = (ratio * 100).toInt()
+                        mainHandler.post { onSendProgress?.invoke(ratio) }
+                        updateService("发送中 $pct%", pct, 100)
                     }
-                    updateService("发送中 $pct%", pct, 100)
                 }
+
                 synchronized(writeLock) { TransferProtocol.writeFileEnd(out, sent) }
-                appendAndNotify("文件已发送：$fileName")
-                mainHandler.post { onSendDone?.invoke(true) }
+
+                if (sent != realSize) {
+                    appendAndNotify("发送字节数异常：$sent / $realSize")
+                    mainHandler.post { onSendDone?.invoke(false) }
+                } else {
+                    appendAndNotify("文件已发送：$fileName")
+                    mainHandler.post { onSendDone?.invoke(true) }
+                }
                 stopService()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                emit(State.ERROR, "发送文件失败：${e.message}")
+                appendAndNotify("发送文件失败：${e.message}")
                 mainHandler.post { onSendDone?.invoke(false) }
                 stopService()
             } finally {

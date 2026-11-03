@@ -38,14 +38,16 @@ class TransferService : Service() {
             val intent = Intent(context, TransferService::class.java).apply {
                 action = ACTION_START
             }
-            context.startForegroundService(intent)
+            // Android 12+ 在后台时不允许启动前台服务，会抛
+            // ForegroundServiceStartNotAllowedException；这里兜住，不能让通知栏保活失败拖垮整个传输。
+            runCatching { context.startForegroundService(intent) }
         }
 
         fun stop(context: Context) {
             val intent = Intent(context, TransferService::class.java).apply {
                 action = ACTION_STOP
             }
-            context.startService(intent)
+            runCatching { context.startService(intent) }
         }
 
         fun update(
@@ -62,7 +64,7 @@ class TransferService : Service() {
                 putExtra(EXTRA_PROGRESS, progress)
                 putExtra(EXTRA_MAX, max)
             }
-            context.startService(intent)
+            runCatching { context.startService(intent) }
         }
     }
 
@@ -90,14 +92,21 @@ class TransferService : Service() {
 
                 val notification = buildNotification(title, text, progress, max)
 
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    startForeground(
-                        NOTIF_ID,
-                        notification,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-                    )
-                } else {
-                    startForeground(NOTIF_ID, notification)
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        startForeground(
+                            NOTIF_ID,
+                            notification,
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                        )
+                    } else {
+                        startForeground(NOTIF_ID, notification)
+                    }
+                } catch (e: Exception) {
+                    // 例如 ForegroundServiceStartNotAllowedException（后台限制）：
+                    // 保活失败只影响通知栏，不能让整个应用崩溃，直接退化停掉服务。
+                    stopSelf()
+                    return START_NOT_STICKY
                 }
             }
         }

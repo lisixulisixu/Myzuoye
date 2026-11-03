@@ -2,9 +2,11 @@ package com.example.myzuoye
 
 import com.example.myzuoye.transfer.Checksum
 import com.example.myzuoye.transfer.TransferProtocol
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -146,5 +148,64 @@ class TransferProtocolTest {
         val b = Checksum.md5Hex(ByteArrayInputStream(bytes))
         assertEquals(a, b)
         assertEquals(32, a.length)
+    }
+
+    /**
+     * 端到端：文件头 + 多分片 + 结束帧，接收侧拼回内容并核对 MD5。
+     *
+     * 重点覆盖“协议里 MD5 是大写、Checksum 返回小写”这个坑——
+     * 之前的实现直接用 == 比较，导致真机上永远校验失败。
+     */
+    @Test
+    fun fileTransferEndToEndKeepsContentAndMd5() {
+        val content = ByteArray(20_000) { (it % 256).toByte() }
+        val md5 = Checksum.md5Hex(content)
+
+        // 发送侧
+        val buffer = ByteArrayOutputStream()
+        val out = DataOutputStream(buffer)
+        TransferProtocol.writeFileHeader(
+            out,
+            TransferProtocol.FileHeader("demo.bin", content.size.toLong(), md5)
+        )
+        var offset = 0
+        while (offset < content.size) {
+            val len = minOf(TransferProtocol.CHUNK_SIZE, content.size - offset)
+            TransferProtocol.writeFileChunk(out, content.copyOfRange(offset, offset + len))
+            offset += len
+        }
+        TransferProtocol.writeFileEnd(out, content.size.toLong())
+
+        // 接收侧
+        val input = DataInputStream(ByteArrayInputStream(buffer.toByteArray()))
+        val header = TransferProtocol.readFrame(input)!!.asFileHeader()
+        assertEquals("demo.bin", header.fileName)
+        assertEquals(content.size.toLong(), header.fileSize)
+
+        val received = ByteArrayOutputStream()
+        var total = 0L
+        var endValue = -1L
+        while (true) {
+            val frame = TransferProtocol.readFrame(input) ?: break
+            when (frame.type) {
+                TransferProtocol.TYPE_FILE_CHUNK -> {
+                    received.write(frame.payload)
+                    total += frame.payload.size
+                }
+
+                TransferProtocol.TYPE_FILE_END -> {
+                    endValue = frame.asLong()
+                    break
+                }
+            }
+        }
+
+        val receivedBytes = received.toByteArray()
+        assertEquals(content.size.toLong(), total)
+        assertEquals(content.size.toLong(), endValue)
+        assertArrayEquals(content, receivedBytes)
+
+        // 关键断言：协议里存大写，本地算小写，必须忽略大小写才相等
+        assertTrue(header.md5Hex.equals(Checksum.md5Hex(receivedBytes), ignoreCase = true))
     }
 }
