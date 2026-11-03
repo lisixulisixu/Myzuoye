@@ -69,4 +69,31 @@ P2P 组网完成后自动建立：组主（`192.168.49.1`）作服务端监听 `
 > 部分国产 ROM 即使 Android 13 以上也要求打开系统「定位服务」，否则搜索不到设备。
 >
 > ⚠️ Android 模拟器不支持真正的 Wi-Fi Direct 组协商（GO Negotiation 在虚拟网卡上无法完成），
-> 所以 P2P 连接与文件传输必须在真机上验证；模拟器只能验证应用启动、设备发现和 UI。
+> 所以 **P2P 连接**必须在真机上验证。
+
+## 在模拟器上验证文本通道 / 文件传输
+
+P2P 组不起来，但**传输层可以单独验证**：长按「文本通道」状态文字会打开调试菜单，
+可以绕过 Wi-Fi Direct 直接起监听或连一个地址。
+
+以两台模拟器为例：
+
+```bash
+# 1) A 机长按通道状态 → 选「仅本地监听」，此时监听 8988
+adb -s emulator-5554 forward tcp:18988 tcp:8988
+
+# 2) B 机需要能访问宿主机 18988，用 reverse 把它映射进 B 机内部
+adb -s emulator-5556 reverse tcp:18989 tcp:18988
+
+# 3) B 机长按通道状态 → 「手动连接」，输入 127.0.0.1:18989
+```
+
+两端状态变成「文本通道：已连接」后即可互发文本、互传文件。
+> 注意：`10.0.2.2` 在部分环境下不可用，优先用上面的 `adb reverse` 方案。
+
+验证完整性可以直接比对两端的 MD5：
+
+```bash
+adb -s emulator-5556 shell md5sum /sdcard/Pictures/xxx.jpg
+adb -s emulator-5554 shell "run-as com.example.myzuoye md5sum files/received/xxx.jpg"
+```
