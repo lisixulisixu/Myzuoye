@@ -7,25 +7,26 @@ Android Wi-Fi Direct（P2P）点对点文件传输。
 - M1 ✅ 授权 → 设备发现 → 建立连接 → 显示角色（组主 / 客户端）与组主地址
 - M2 ✅ TCP 文本通道：组主监听 `8988`、客户端带重试连接，双向互发 UTF-8 文本
 - M3 ✅ 单向文件传输：选择文件 → 文件头（文件名/大小/MD5）→ 8KB 分片 → 落盘 + 进度 + MD5 校验
-- M4 ⏳ 前台服务保活、断连恢复
+- M4 ✅ 前台服务保活：传输期间通知栏进度，切后台/锁屏不中断
 
 ## 环境
 
 - AGP 9.3.0（内置 Kotlin 支持，无需单独的 kotlin 插件）
-- compileSdk / targetSdk 37，minSdk 33（Android 13+）
+- compileSdk / targetSdk 37，minSdk 24
 - 依赖：appcompat、material、recyclerview、kotlinx-coroutines
 
 ## 代码结构
 
 | 路径 | 说明 |
 | --- | --- |
-| `app/src/main/java/com/example/ptp/MainActivity.kt` | 主界面、权限流程、状态展示 |
-| `app/src/main/java/com/example/ptp/p2p/P2pController.kt` | Wi-Fi Direct 控制层：搜索 / 连接 / 建组 / 取组主地址 |
-| `app/src/main/java/com/example/ptp/p2p/WifiDirectReceiver.kt` | 系统广播接收与翻译 |
-| `app/src/main/java/com/example/ptp/ui/DeviceAdapter.kt` | 附近设备列表 |
-| `app/src/main/java/com/example/ptp/transfer/TransferProtocol.kt` | 帧协议：1 字节类型 + 4 字节长度 + 负载 |
-| `app/src/main/java/com/example/ptp/transfer/TransferManager.kt` | TCP 通道：服务端监听 / 客户端重试连接 / 收发与状态回调 |
-| `app/src/main/java/com/example/ptp/transfer/Checksum.kt` | MD5 校验工具，用于文件完整性核对 |
+| `app/src/main/java/com/example/myzuoye/MainActivity.kt` | 主界面、权限流程、状态展示 |
+| `app/src/main/java/com/example/myzuoye/p2p/P2pController.kt` | Wi-Fi Direct 控制层：搜索 / 连接 / 建组 / 取组主地址 |
+| `app/src/main/java/com/example/myzuoye/p2p/WifiDirectReceiver.kt` | 系统广播接收与翻译 |
+| `app/src/main/java/com/example/myzuoye/ui/DeviceAdapter.kt` | 附近设备列表 |
+| `app/src/main/java/com/example/myzuoye/transfer/TransferProtocol.kt` | 帧协议：1 字节类型 + 4 字节长度 + 负载 |
+| `app/src/main/java/com/example/myzuoye/transfer/TransferManager.kt` | TCP 通道：服务端监听 / 客户端重试连接 / 收发与状态回调 |
+| `app/src/main/java/com/example/myzuoye/transfer/Checksum.kt` | MD5 校验工具，用于文件完整性核对 |
+| `app/src/main/java/com/example/myzuoye/service/TransferService.kt` | 前台服务（dataSync）：传输期间保活 + 通知进度 |
 
 ## 文本通道（M2）
 
@@ -55,9 +56,17 @@ P2P 组网完成后自动建立：组主（`192.168.49.1`）作服务端监听 `
 （`filesDir/received`），传输结束后核对大小与 MD5，不一致则丢弃。当前为单向发送，
 双向/多文件待后续迭代。
 
+## 前台服务保活（M4）
+
+文件传输期间，`TransferService` 以前台服务（`FOREGROUND_SERVICE_TYPE_DATA_SYNC`）运行，
+通知栏展示传输进度，切到后台或锁屏也不会被系统回收连接。传输结束自动停止服务。
+
 ## 真机验证
 
 两台手机都安装本应用并打开 Wi-Fi（不需要连同一个路由器），各自点一次「搜索设备」，
 应能在列表中看到对方；点击设备即可建立 P2P 连接，界面会显示当前角色和组主地址 `192.168.49.1`。
 
 > 部分国产 ROM 即使 Android 13 以上也要求打开系统「定位服务」，否则搜索不到设备。
+>
+> ⚠️ Android 模拟器不支持真正的 Wi-Fi Direct 组协商（GO Negotiation 在虚拟网卡上无法完成），
+> 所以 P2P 连接与文件传输必须在真机上验证；模拟器只能验证应用启动、设备发现和 UI。
