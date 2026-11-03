@@ -7,6 +7,8 @@ import android.net.Uri
 import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pInfo
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.view.View
@@ -81,6 +83,39 @@ class MainActivity : AppCompatActivity() {
 
     /** 当前是否处于发现流程中，用于避免状态文案被广播回调覆盖 */
     private var searching = false
+
+    /** 上一次的设备数量，用于日志降噪（列表刷新很频繁） */
+    private var lastPeerCount = -1
+
+    /** P2P 组是否已建立 */
+    private var p2pConnected = false
+
+    /** 是否正在发起连接（协商中），此时不要自动续搜，否则会打断 GO 协商 */
+    private var connecting = false
+
+    private val uiHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * 自动续搜。
+     *
+     * 系统的 discoverPeers 一段时间后会自行停止（通常 30 秒左右），停了以后
+     * PEERS_CHANGED 不再触发，列表就永远是旧的。这里在界面可见时定期检查：
+     * 停了就重新发起，还在搜就只刷一次列表，保证「附近设备」一直是最新的。
+     */
+    private val discoveryLoop = object : Runnable {
+        override fun run() {
+            if (controller.isSupported && !p2pConnected && !connecting && hasNearbyPermission()) {
+                if (controller.isDiscovering) {
+                    controller.requestPeers()
+                } else {
+                    // 绕过按钮的防抖，但保留一次最小间隔
+                    lastDiscoverAt = 0L
+                    startDiscovery()
+                }
+            }
+            uiHandler.postDelayed(this, DISCOVERY_KEEPALIVE_MS)
+        }
+    }
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -175,10 +210,15 @@ class MainActivity : AppCompatActivity() {
             }
             else -> tvP2pState.setText(R.string.p2p_state_no_permission)
         }
+
+        // 界面可见期间保持搜索活跃，避免系统自动停止后列表不再更新
+        uiHandler.removeCallbacks(discoveryLoop)
+        uiHandler.postDelayed(discoveryLoop, DISCOVERY_KEEPALIVE_MS)
     }
 
     override fun onStop() {
         super.onStop()
+        uiHandler.removeCallbacks(discoveryLoop)
         controller.stop()
         TransferManager.onStateChanged = null
         TransferManager.onMessage = null
@@ -247,9 +287,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         controller.onPeersChanged = { peers ->
-            adapter.submit(peers)
+            val changed = adapter.submit(peers)
             tvPeerHint.text = getString(R.string.nearby_devices, peers.size)
-            log("设备列表更新：${peers.size} 台")
+            // 只在数量真的变化时打日志，避免每次刷新都刷屏
+            if (changed && peers.size != lastPeerCount) {
+                lastPeerCount = peers.size
+                log("附近设备：${peers.size} 台")
+            }
         }
 
         controller.onThisDeviceChanged = { device ->
@@ -270,9 +314,19 @@ class MainActivity : AppCompatActivity() {
         }
 
         controller.onDisconnected = {
+            p2pConnected = false
+            connecting = false
+            adapter.setConnecting(null)
             tvRoleInfo.setText(R.string.role_unknown)
             // 这里不主动关通道：P2P 链路断开时 socket 会自己报错退出，
             // 而组主的监听保留下来，下次重新组网可以直接复用。
+        }
+
+        controller.onConnectFailed = { reason ->
+            connecting = false
+            adapter.setConnecting(null)
+            tvP2pState.setText(R.string.p2p_state_ready)
+            toast("连接失败：$reason")
         }
 
         controller.onDiscoveryChanged = { discovering ->
@@ -341,12 +395,23 @@ class MainActivity : AppCompatActivity() {
 
     private fun onDeviceClicked(device: WifiP2pDevice) {
         if (!requestPermissionIfNeeded()) return
+        if (connecting) {
+            log("正在连接中，请稍候…")
+            return
+        }
+        connecting = true
         tvP2pState.setText(R.string.p2p_state_connecting)
         log("正在连接 ${displayName(device)}（${device.deviceAddress}）")
+        // 立刻在列表上标出“连接中”，避免用户重复点击同一条
+        adapter.setConnecting(device.deviceAddress)
         controller.connect(device)
     }
 
     private fun onConnected(info: WifiP2pInfo) {
+        p2pConnected = true
+        connecting = false
+        adapter.setConnecting(null)
+
         val role = if (info.isGroupOwner) "组主（GO）" else "客户端"
         // 组主的固定地址是 192.168.49.1，组主自己拿不到 groupOwnerAddress
         val groupOwnerIp = if (info.isGroupOwner) {
@@ -603,7 +668,13 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val KEY_PERMISSION_ASKED = "permission_asked"
-        const val DISCOVER_DEBOUNCE_MS = 1000L
+
+        /** 手动点“搜索设备”的最小间隔，压得太短会频繁触发系统 BUSY */
+        const val DISCOVER_DEBOUNCE_MS = 600L
+
+        /** 自动续搜的检查间隔：系统搜索会自动停止，停了就靠这个把它拉起来 */
+        const val DISCOVERY_KEEPALIVE_MS = 6000L
+
         const val MAX_LOG_LINES = 4
 
         /** 模拟器里 10.0.2.2 指向宿主机；配合 adb forward 即可跨模拟器联调 */

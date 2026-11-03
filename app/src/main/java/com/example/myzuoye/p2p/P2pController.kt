@@ -10,8 +10,10 @@ import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
 import android.os.Build
+import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Wi-Fi Direct 控制层：把 WifiP2pManager 的一堆异步调用包成一套简单的接口。
@@ -51,6 +53,9 @@ class P2pController(context: Context) {
     /** 收到对端连接请求（邀请）。返回 true 表示接受，false 表示拒绝 */
     var onConnectionRequest: ((WifiP2pDevice) -> Boolean)? = null
 
+    /** 连接最终失败（含重试后仍失败），用于清掉界面上的“连接中”标记 */
+    var onConnectFailed: ((String) -> Unit)? = null
+
     private val appContext = context.applicationContext
     private val manager: WifiP2pManager? =
         appContext.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
@@ -58,6 +63,22 @@ class P2pController(context: Context) {
     private var channel: WifiP2pManager.Channel? = null
     private var receiver: WifiDirectReceiver? = null
     private var receiverRegistered = false
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * 是否正在执行 discoverPeers。由 DISCOVERY_CHANGED 广播与 discover 回调共同维护：
+     * 搜索中再调 discoverPeers 会被系统判 BUSY，先 stop 再 discover 又要多等一次异步往返，
+     * 所以这个状态决定了「重新发起」还是「只刷列表」。
+     */
+    @Volatile
+    private var discovering = false
+
+    /** 当前是否处于搜索状态（界面用，避免重复触发） */
+    val isDiscovering: Boolean get() = discovering
+
+    /** connect 前 stopPeerDiscovery 的兜底回调，防止个别 ROM 不回调导致点设备没反应 */
+    private var connectFallback: Runnable? = null
 
     val isSupported: Boolean get() = manager != null
 
@@ -92,6 +113,7 @@ class P2pController(context: Context) {
         }
 
         override fun onDiscoveryChanged(discovering: Boolean) {
+            this@P2pController.discovering = discovering
             log(if (discovering) "正在搜索附近设备…" else "搜索已停止")
             onDiscoveryChanged?.invoke(discovering)
         }
@@ -158,19 +180,54 @@ class P2pController(context: Context) {
 
     /** 在 onDestroy 里调用：彻底释放 */
     fun release() {
+        connectFallback?.let { mainHandler.removeCallbacks(it) }
+        connectFallback = null
         stop()
         runCatching { channel?.close() }
         channel = null
         receiver = null
     }
 
-    /** 开始搜索。内部先 stop 再 discover，避免第二次搜索直接返回 BUSY */
+    /**
+     * 开始搜索附近设备。
+     *
+     * 速度上做两件事：
+     * 1. 已经在搜索时不再重复 discoverPeers（系统会返回 BUSY），直接拉一次列表即可；
+     * 2. 未在搜索时直接 discoverPeers，不再固定先 stopPeerDiscovery ——
+     *    少一次异步往返，在多数机型上能省 0.3~1 秒；只有真的返回 BUSY 时才走「停一次再重试」。
+     */
     fun startDiscovery() {
         val (mgr, ch) = requireChannel() ?: return
+
+        if (discovering) {
+            requestPeers()
+            return
+        }
+
         try {
-            mgr.stopPeerDiscovery(ch, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() = discover(mgr, ch)
-                override fun onFailure(reason: Int) = discover(mgr, ch)
+            mgr.discoverPeers(ch, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    discovering = true
+                    log("开始搜索附近设备…")
+                    // 立刻拉一次：系统缓存里可能已有上次发现的设备，能马上上屏
+                    requestPeers()
+                }
+
+                override fun onFailure(reason: Int) {
+                    discovering = false
+                    if (reason == WifiP2pManager.BUSY) {
+                        // 系统里还有残留的搜索流程，这时才需要先停再搜
+                        log("系统忙，重置搜索状态后重试…")
+                        runCatching {
+                            mgr.stopPeerDiscovery(ch, object : WifiP2pManager.ActionListener {
+                                override fun onSuccess() = discover(mgr, ch)
+                                override fun onFailure(r: Int) = discover(mgr, ch)
+                            })
+                        }.onFailure { log("重置搜索失败：${it.message}") }
+                    } else {
+                        log("搜索失败：${reasonText(reason)}")
+                    }
+                }
             })
         } catch (e: SecurityException) {
             log("缺少附近设备权限，无法搜索：${e.message}")
@@ -179,6 +236,7 @@ class P2pController(context: Context) {
 
     fun stopDiscovery() {
         val (mgr, ch) = requireChannel() ?: return
+        discovering = false
         runCatching { mgr.stopPeerDiscovery(ch, null) }
     }
 
@@ -186,10 +244,13 @@ class P2pController(context: Context) {
         runCatching {
             mgr.discoverPeers(ch, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() {
+                    discovering = true
                     log("开始搜索附近设备…")
+                    requestPeers()
                 }
 
                 override fun onFailure(reason: Int) {
+                    discovering = false
                     log("搜索失败：${reasonText(reason)}")
                 }
             })
@@ -214,26 +275,26 @@ class P2pController(context: Context) {
             buildConfig(device.deviceAddress)
         } catch (e: IllegalArgumentException) {
             log("设备地址无效，无法连接：${e.message}")
+            onConnectFailed?.invoke("设备地址无效")
             return
         } catch (e: Exception) {
             log("创建连接配置失败：${e.message}")
+            onConnectFailed?.invoke("创建连接配置失败")
             return
         }
 
         // 连接前必须先停止发现：discoverPeers 与 connect 在部分设备上互斥，
         // 发现未停就直接 connect 会返回 BUSY 或导致组协商失败。
-        runCatching {
-            mgr.stopPeerDiscovery(ch, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() = doConnect(mgr, ch, config)
-                override fun onFailure(reason: Int) = doConnect(mgr, ch, config)
-            })
-        }.onFailure { log("停止搜索失败：${it.message}") }
+        withDiscoveryStopped(mgr, ch, "停止搜索超时，直接发起连接") {
+            doConnect(mgr, ch, config)
+        }
     }
 
     private fun doConnect(
         mgr: WifiP2pManager,
         ch: WifiP2pManager.Channel,
-        config: WifiP2pConfig
+        config: WifiP2pConfig,
+        retried: Boolean = false
     ) {
         runCatching {
             mgr.connect(ch, config, object : WifiP2pManager.ActionListener {
@@ -242,31 +303,94 @@ class P2pController(context: Context) {
                 }
 
                 override fun onFailure(reason: Int) {
-                    log("连接失败：${reasonText(reason)}")
-                    if (reason == WifiP2pManager.BUSY) {
-                        log("提示：可能已有残留分组，请点“断开”后重试")
+                    // BUSY 多半是上一次失败留下残连接，自动清理后重试一次，
+                    // 免得用户还得手动点“断开”再来一遍
+                    if (reason == WifiP2pManager.BUSY && !retried) {
+                        log("系统忙，清理残留连接后重试…")
+                        runCatching {
+                            mgr.cancelConnect(ch, object : WifiP2pManager.ActionListener {
+                                override fun onSuccess() = doConnect(mgr, ch, config, true)
+                                override fun onFailure(r: Int) = doConnect(mgr, ch, config, true)
+                            })
+                        }.onFailure { doConnect(mgr, ch, config, true) }
+                        return
                     }
+
+                    val text = reasonText(reason)
+                    log("连接失败：$text")
+                    onConnectFailed?.invoke(text)
                 }
             })
-        }.onFailure { log("连接异常：${it.message}") }
+        }.onFailure {
+            log("连接异常：${it.message}")
+            onConnectFailed?.invoke(it.message ?: "连接异常")
+        }
+    }
+
+    /**
+     * 先停掉正在进行的设备发现，再执行 [action]。
+     *
+     * 为什么需要：discoverPeers 与 connect / createGroup 在部分机型上互斥，
+     * 发现没停就发起操作会直接 BUSY。
+     * 为什么要有兜底：个别 ROM 的 stopPeerDiscovery 回调不返回，若一直等就表现为
+     * 「点了设备没反应」，所以超时后照常执行 [action]。
+     */
+    private fun withDiscoveryStopped(
+        mgr: WifiP2pManager,
+        ch: WifiP2pManager.Channel,
+        timeoutLog: String,
+        action: () -> Unit
+    ) {
+        val started = AtomicBoolean(false)
+
+        fun begin() {
+            if (!started.compareAndSet(false, true)) return
+            connectFallback?.let { mainHandler.removeCallbacks(it) }
+            connectFallback = null
+            action()
+        }
+
+        val fallback = Runnable {
+            log(timeoutLog)
+            begin()
+        }
+        connectFallback = fallback
+        mainHandler.postDelayed(fallback, STOP_DISCOVERY_TIMEOUT_MS)
+
+        runCatching {
+            mgr.stopPeerDiscovery(ch, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    discovering = false
+                    begin()
+                }
+
+                override fun onFailure(reason: Int) = begin()
+            })
+        }.onFailure {
+            log("停止搜索失败：${it.message}")
+            begin()
+        }
     }
 
     /** 自己建组，本机成为组主（GO），适合“我是接收端”的场景 */
     fun createGroup() {
         val (mgr, ch) = requireChannel() ?: return
-        runCatching {
-            mgr.createGroup(ch, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() {
-                    log("已创建分组，本机为组主，等待对方连接…")
-                    onGroupCreated?.invoke()
-                    requestConnectionInfo()
-                }
+        // 建组前同样先停发现，否则系统可能直接返回 BUSY
+        withDiscoveryStopped(mgr, ch, "停止搜索超时，直接建组") {
+            runCatching {
+                mgr.createGroup(ch, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() {
+                        log("已创建分组，本机为组主，等待对方连接…")
+                        onGroupCreated?.invoke()
+                        requestConnectionInfo()
+                    }
 
-                override fun onFailure(reason: Int) {
-                    log("创建分组失败：${reasonText(reason)}")
-                }
-            })
-        }.onFailure { log("创建分组异常：${it.message}") }
+                    override fun onFailure(reason: Int) {
+                        log("创建分组失败：${reasonText(reason)}")
+                    }
+                })
+            }.onFailure { log("创建分组异常：${it.message}") }
+        }
     }
 
     /** 断开：取消正在进行的连接 + 移除分组 */
@@ -347,5 +471,8 @@ class P2pController(context: Context) {
     private companion object {
         /** Android 16 / API 36 */
         const val API_36 = 36
+
+        /** stopPeerDiscovery 的兜底超时：到点不再等回调，直接执行后续动作 */
+        const val STOP_DISCOVERY_TIMEOUT_MS = 800L
     }
 }

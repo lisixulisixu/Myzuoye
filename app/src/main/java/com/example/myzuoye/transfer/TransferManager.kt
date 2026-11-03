@@ -194,9 +194,12 @@ object TransferManager {
     /**
      * 以客户端身份连接组主。
      *
-     * 刚建组时对方的 ServerSocket 可能还没起来，所以带重试：默认 12 次、每次间隔 1 秒。
+     * 重试策略针对「P2P 组刚形成、本机还没拿到 192.168.49.x 地址」这个窗口做了优化：
+     * - 单次超时压到 1 秒（P2P 链路 RTT 是毫秒级，1 秒连不上就说明还没就绪）；
+     * - 重试间隔从 200ms 起步逐步拉长，地址一分配好就能立刻连上，
+     *   不像原来每次固定等 1 秒、失败还要 4 秒超时。
      */
-    fun connect(host: String, port: Int = TransferProtocol.PORT, attempts: Int = 12) {
+    fun connect(host: String, port: Int = TransferProtocol.PORT, attempts: Int = 16) {
         if (state == State.CONNECTED) return
         if (connectJob?.isActive == true) return
 
@@ -204,7 +207,10 @@ object TransferManager {
         connectJob = scope.launch {
             var lastError: Exception? = null
             repeat(attempts) { index ->
-                emit(State.CONNECTING, "第 ${index + 1}/$attempts 次连接 $host:$port")
+                // 每次重试都刷状态太吵，只在首次和每 4 次时更新
+                if (index == 0 || index % 4 == 0) {
+                    emit(State.CONNECTING, "正在连接 $host:$port（第 ${index + 1} 次）")
+                }
                 try {
                     val client = Socket()
                     client.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
@@ -215,7 +221,7 @@ object TransferManager {
                     throw e
                 } catch (e: Exception) {
                     lastError = e
-                    delay(RETRY_INTERVAL_MS)
+                    delay(retryDelayMs(index))
                 }
             }
             emit(
@@ -223,6 +229,13 @@ object TransferManager {
                 "连接 $host:$port 失败：${lastError?.message ?: "未知原因"}"
             )
         }
+    }
+
+    /** 重试间隔：前几次密一点，后面逐步拉长，兼顾速度与空转开销 */
+    private fun retryDelayMs(attempt: Int): Long = when {
+        attempt < 5 -> 200L
+        attempt < 10 -> 400L
+        else -> 700L
     }
 
     // ------------------------------------------------------------------ 收发
@@ -619,8 +632,7 @@ object TransferManager {
         mainHandler.post { onStateChanged?.invoke(newState, message) }
     }
 
-    private const val CONNECT_TIMEOUT_MS = 4000
-    private const val RETRY_INTERVAL_MS = 1000L
+    private const val CONNECT_TIMEOUT_MS = 1000
     private const val MAX_HISTORY = 200
     private const val BIND_RETRIES = 3
     private const val BIND_RETRY_DELAY_MS = 300L
