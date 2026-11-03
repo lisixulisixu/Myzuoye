@@ -6,7 +6,7 @@ Android Wi-Fi Direct（P2P）点对点文件传输。
 
 - M1 ✅ 授权 → 设备发现 → 建立连接 → 显示角色（组主 / 客户端）与组主地址
 - M2 ✅ TCP 文本通道：组主监听 `8988`、客户端带重试连接，双向互发 UTF-8 文本
-- M3 ⏳ 文件传输（协议头 + 分片 + 进度 + 校验）
+- M3 ✅ 单向文件传输：选择文件 → 文件头（文件名/大小/MD5）→ 8KB 分片 → 落盘 + 进度 + MD5 校验
 - M4 ⏳ 前台服务保活、断连恢复
 
 ## 环境
@@ -25,6 +25,7 @@ Android Wi-Fi Direct（P2P）点对点文件传输。
 | `app/src/main/java/com/example/ptp/ui/DeviceAdapter.kt` | 附近设备列表 |
 | `app/src/main/java/com/example/ptp/transfer/TransferProtocol.kt` | 帧协议：1 字节类型 + 4 字节长度 + 负载 |
 | `app/src/main/java/com/example/ptp/transfer/TransferManager.kt` | TCP 通道：服务端监听 / 客户端重试连接 / 收发与状态回调 |
+| `app/src/main/java/com/example/ptp/transfer/Checksum.kt` | MD5 校验工具，用于文件完整性核对 |
 
 ## 文本通道（M2）
 
@@ -38,7 +39,21 @@ P2P 组网完成后自动建立：组主（`192.168.49.1`）作服务端监听 `
 +--------+----------+----------------+
 ```
 
-`type=0x01` 为文本帧（UTF-8），M3 在此基础上追加文件头 / 分片 / 结束帧。
+## 文件传输（M3）
+
+帧类型：
+
+| type | 含义 | payload |
+| --- | --- | --- |
+| `0x01` | 文本 | UTF-8 字符串 |
+| `0x02` | 文件头 | 版本(1) + 文件名长度(2) + 文件名 + 大小(8) + MD5(32) |
+| `0x03` | 分片 | 原始文件字节（8KB） |
+| `0x04` | 结束 | 已发送字节总数(long) |
+| `0x05` | 取消 | 空 |
+
+发送方用系统文件选择器（SAF）选文件，先算 MD5 再逐片发送；接收方落盘到应用私有目录
+（`filesDir/received`），传输结束后核对大小与 MD5，不一致则丢弃。当前为单向发送，
+双向/多文件待后续迭代。
 
 ## 真机验证
 
