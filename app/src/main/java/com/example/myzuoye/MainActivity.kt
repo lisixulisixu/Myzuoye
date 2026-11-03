@@ -1,4 +1,4 @@
-package com.example.ptp
+package com.example.myzuoye
 
 import android.Manifest
 import android.content.Intent
@@ -25,9 +25,9 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.example.ptp.p2p.P2pController
-import com.example.ptp.transfer.TransferManager
-import com.example.ptp.ui.DeviceAdapter
+import com.example.myzuoye.p2p.P2pController
+import com.example.myzuoye.transfer.TransferManager
+import com.example.myzuoye.ui.DeviceAdapter
 import java.io.File
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -122,6 +122,8 @@ class MainActivity : AppCompatActivity() {
 
         // M3：接收文件保存到应用私有目录，避开分区存储权限
         TransferManager.receiveDir = File(filesDir, "received")
+        // M4：attach 应用上下文，供前台服务保活使用
+        TransferManager.attach(this)
 
         btnDiscover.setOnClickListener { startDiscovery(force = true) }
         btnCreateGroup.setOnClickListener { controller.createGroup() }

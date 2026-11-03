@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">pTp</string>
+    <string name="app_name">Myzuoye</string>
     <string name="photo1_name">HelloKito</string>
 
     <string name="p2p_state_init">Wi-Fi Direct 初始化中…</string>
@@ -47,4 +47,9 @@
     <string name="dialog_permission_title">需要“附近设备”权限</string>
     <string name="dialog_permission_message">搜索和连接附近设备依赖“附近设备”权限，请到系统设置中手动开启后返回本页。</string>
     <string name="action_go_settings">去设置</string>
+
+    <!-- M4：前台服务通知 -->
+    <string name="notif_channel_name">文件传输</string>
+    <string name="notif_transferring">正在传输文件</string>
+    <string name="notif_idle">连接空闲</string>
 </resources>

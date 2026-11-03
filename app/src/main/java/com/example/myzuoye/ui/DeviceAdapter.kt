@@ -1,4 +1,4 @@
-package com.example.ptp.ui
+package com.example.myzuoye.ui
 
 import android.net.wifi.p2p.WifiP2pDevice
 import android.view.LayoutInflater
@@ -6,7 +6,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
-import com.example.ptp.R
+import com.example.myzuoye.R
 
 /**
  * 附近设备列表适配器。

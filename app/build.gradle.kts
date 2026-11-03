@@ -3,14 +3,14 @@ plugins {
 }
 
 android {
-    namespace = "com.example.ptp"
+    namespace = "com.example.myzuoye"
     compileSdk {
         version = release(37)
     }
 
     defaultConfig {
-        applicationId = "com.example.ptp"
-        minSdk = 33
+        applicationId = "com.example.myzuoye"
+        minSdk = 24
         targetSdk = 37
         versionCode = 1
         versionName = "1.0"
@@ -29,13 +29,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
-    sourceSets {
-        getByName("main") {
-            res {
-                directories.add("src\\main\\res")
-            }
-        }
-    }
 }
 
 dependencies {
@@ -45,8 +38,8 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.material)
     implementation(libs.androidx.recyclerview)
+    implementation(libs.kotlinx.coroutines.android)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 }

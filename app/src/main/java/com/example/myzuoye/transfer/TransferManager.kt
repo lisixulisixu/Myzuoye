@@ -1,8 +1,9 @@
-package com.example.ptp.transfer
+package com.example.myzuoye.transfer
 
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import com.example.myzuoye.service.TransferService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +37,17 @@ object TransferManager {
 
     /** 接收方保存文件到哪个目录（应用私有目录，避开分区存储权限） */
     lateinit var receiveDir: File
+
+    /** 应用上下文，用于控制前台服务（保活）。由 MainActivity 初始化 */
+    private var appContext: Context? = null
+
+    /** 前台服务是否已启动（跟踪状态，避免重复 start） */
+    @Volatile
+    private var serviceStarted = false
+
+    fun attach(context: Context) {
+        appContext = context.applicationContext
+    }
 
     /** 文件接收进度回调（主线程）。0..1 之间的比例 */
     var onReceiveProgress: ((Float) -> Unit)? = null
@@ -73,6 +85,10 @@ object TransferManager {
     private var connectJob: Job? = null
 
     private var serverSocket: ServerSocket? = null
+
+    /** 原子标志：是否处于监听状态，防止 startServer 被并发/重复触发时的 bind 竞态 */
+    @Volatile
+    private var listening = false
 
     @Volatile
     private var socket: Socket? = null
@@ -112,14 +128,13 @@ object TransferManager {
      * 以组主身份开始监听。重复调用是安全的（已在监听则直接返回）。
      */
     fun startServer(port: Int = TransferProtocol.PORT) {
-        if (listenJob?.isActive == true || serverSocket != null) return
+        if (listening) return
 
+        listening = true
         listenJob = scope.launch {
             var ss: ServerSocket? = null
             try {
-                ss = ServerSocket()
-                ss.reuseAddress = true
-                ss.bind(InetSocketAddress(port))
+                ss = bindWithRetry(port)
                 serverSocket = ss
                 emit(State.LISTENING, "已监听端口 $port，等待对方接入")
 
@@ -135,9 +150,30 @@ object TransferManager {
                 emit(State.ERROR, "监听失败：${e.message}")
             } finally {
                 serverSocket = null
+                listening = false
                 runCatching { ss?.close() }
             }
         }
+    }
+
+    /**
+     * 绑定端口。刚 stop 后端口可能处于 TIME_WAIT，所以失败时重试几次。
+     */
+    private fun bindWithRetry(port: Int): ServerSocket {
+        var lastError: Exception? = null
+        repeat(BIND_RETRIES) { attempt ->
+            val ss = ServerSocket()
+            try {
+                ss.reuseAddress = true
+                ss.bind(InetSocketAddress(port))
+                return ss
+            } catch (e: Exception) {
+                lastError = e
+                runCatching { ss.close() }
+                Thread.sleep(BIND_RETRY_DELAY_MS)
+            }
+        }
+        throw lastError ?: IllegalStateException("bind 失败")
     }
 
     // ------------------------------------------------------------------ 客户端
@@ -201,6 +237,7 @@ object TransferManager {
         listenJob = null
         connectJob?.cancel()
         connectJob = null
+        listening = false
 
         val ss = serverSocket
         serverSocket = null
@@ -298,6 +335,7 @@ object TransferManager {
 
         appendAndNotify("收到文件：${header.fileName}（${formatSize(header.fileSize)}）")
         mainHandler.post { onReceiveProgress?.invoke(0f) }
+        startService("接收 ${header.fileName}", 0, 100)
     }
 
     private fun handleFileChunk(frame: TransferProtocol.Frame) {
@@ -314,7 +352,9 @@ object TransferManager {
             } else {
                 0f
             }
+            val pct = (progress.coerceIn(0f, 1f) * 100).toInt()
             mainHandler.post { onReceiveProgress?.invoke(progress.coerceIn(0f, 1f)) }
+            updateService("接收中 ${pct}%", pct, 100)
         } catch (e: Exception) {
             emit(State.ERROR, "写入文件失败：${e.message}")
             abortReceive()
@@ -350,11 +390,13 @@ object TransferManager {
         if (ok) {
             appendAndNotify("文件接收完成：${file.name}")
             mainHandler.post { onReceiveDone?.invoke(donePath) }
+            stopService()
         } else {
             appendAndNotify("文件校验失败，已丢弃")
             runCatching { file.delete() }
             emit(State.ERROR, "文件校验失败（大小或 MD5 不匹配）")
             mainHandler.post { onReceiveDone?.invoke(null) }
+            stopService()
         }
     }
 
@@ -389,10 +431,12 @@ object TransferManager {
         if (sending) return false
 
         sending = true
+        startService("发送 $fileName", 0, 100)
         scope.launch {
             val out = output
             if (out == null) {
                 sending = false
+                stopService()
                 mainHandler.post { onSendDone?.invoke(false) }
                 return@launch
             }
@@ -413,20 +457,24 @@ object TransferManager {
                     val chunk = if (read == buffer.size) buffer else buffer.copyOf(read)
                     synchronized(writeLock) { TransferProtocol.writeFileChunk(out, chunk) }
                     sent += read
+                    val pct = if (fileSize > 0) ((sent.toFloat() / fileSize.toFloat()).coerceIn(0f, 1f) * 100).toInt() else 100
                     mainHandler.post {
                         onSendProgress?.invoke(
                             if (fileSize > 0) (sent.toFloat() / fileSize.toFloat()).coerceIn(0f, 1f) else 1f
                         )
                     }
+                    updateService("发送中 $pct%", pct, 100)
                 }
                 synchronized(writeLock) { TransferProtocol.writeFileEnd(out, sent) }
                 appendAndNotify("文件已发送：$fileName")
                 mainHandler.post { onSendDone?.invoke(true) }
+                stopService()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 emit(State.ERROR, "发送文件失败：${e.message}")
                 mainHandler.post { onSendDone?.invoke(false) }
+                stopService()
             } finally {
                 sending = false
             }
@@ -452,6 +500,36 @@ object TransferManager {
         else -> "$bytes B"
     }
 
+    // ------------------------------------------------------------------ 前台服务
+
+    private fun startService(title: String, progress: Int, max: Int) {
+        val ctx = appContext ?: return
+        if (serviceStarted) {
+            TransferService.update(ctx, title, "", progress, max)
+        } else {
+            serviceStarted = true
+            TransferService.start(ctx)
+            TransferService.update(ctx, title, "", progress, max)
+        }
+    }
+
+    private fun updateService(text: String, progress: Int, max: Int) {
+        val ctx = appContext ?: return
+        if (serviceStarted) {
+            TransferService.update(ctx, getServiceTitle(), text, progress, max)
+        }
+    }
+
+    private fun getServiceTitle(): String = "正在传输文件"
+
+    private fun stopService() {
+        val ctx = appContext ?: return
+        if (serviceStarted) {
+            serviceStarted = false
+            TransferService.stop(ctx)
+        }
+    }
+
     private fun appendAndNotify(line: String) {
         synchronized(messageBuffer) {
             messageBuffer.add(line)
@@ -468,4 +546,6 @@ object TransferManager {
     private const val CONNECT_TIMEOUT_MS = 4000
     private const val RETRY_INTERVAL_MS = 1000L
     private const val MAX_HISTORY = 200
+    private const val BIND_RETRIES = 3
+    private const val BIND_RETRY_DELAY_MS = 300L
 }

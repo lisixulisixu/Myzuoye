@@ -1,7 +1,7 @@
-package com.example.ptp
+package com.example.myzuoye
 
-import com.example.ptp.transfer.Checksum
-import com.example.ptp.transfer.TransferProtocol
+import com.example.myzuoye.transfer.Checksum
+import com.example.myzuoye.transfer.TransferProtocol
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
