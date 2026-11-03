@@ -257,6 +257,12 @@ class MainActivity : AppCompatActivity() {
             TransferManager.startServer()
         }
 
+        controller.onConnectionRequest = { device ->
+            // 收到对方邀请，默认接受（WPS PBC 免确认）
+            log("收到 ${displayName(device)} 的邀请，自动接受")
+            true
+        }
+
         controller.onDisconnected = {
             tvRoleInfo.setText(R.string.role_unknown)
             // 这里不主动关通道：P2P 链路断开时 socket 会自己报错退出，
@@ -329,10 +335,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun onDeviceClicked(device: WifiP2pDevice) {
         if (!requestPermissionIfNeeded()) return
-        if (device.status == WifiP2pDevice.CONNECTED) {
-            log("已与该设备连接")
-            return
-        }
         tvP2pState.setText(R.string.p2p_state_connecting)
         log("正在连接 ${displayName(device)}（${device.deviceAddress}）")
         controller.connect(device)
@@ -350,6 +352,10 @@ class MainActivity : AppCompatActivity() {
         tvP2pState.setText(R.string.p2p_state_connected)
         tvRoleInfo.text = getString(R.string.role_info, role, groupOwnerIp)
         log("连接成功：$role，组主地址 $groupOwnerIp")
+
+        // 连接成功后清空设备列表，避免残留“已连接/邀请中”的旧状态
+        adapter.clear()
+        tvPeerHint.setText(R.string.nearby_devices_zero)
 
         // M2：组网完成后立刻拉起 TCP 通道
         if (info.isGroupOwner) {

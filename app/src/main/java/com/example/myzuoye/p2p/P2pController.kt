@@ -48,6 +48,9 @@ class P2pController(context: Context) {
     /** 发现流程状态 */
     var onDiscoveryChanged: ((Boolean) -> Unit)? = null
 
+    /** 收到对端连接请求（邀请）。返回 true 表示接受，false 表示拒绝 */
+    var onConnectionRequest: ((WifiP2pDevice) -> Boolean)? = null
+
     private val appContext = context.applicationContext
     private val manager: WifiP2pManager? =
         appContext.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
@@ -91,6 +94,18 @@ class P2pController(context: Context) {
         override fun onDiscoveryChanged(discovering: Boolean) {
             log(if (discovering) "正在搜索附近设备…" else "搜索已停止")
             onDiscoveryChanged?.invoke(discovering)
+        }
+
+        override fun onConnectionRequest(requestingDevice: WifiP2pDevice) {
+            val accept = onConnectionRequest?.invoke(requestingDevice) ?: true
+            val receiver = this@P2pController.receiver
+            if (accept) {
+                log("接受来自 ${requestingDevice.deviceName} 的连接请求")
+                receiver?.acceptConnectionRequest(requestingDevice)
+            } else {
+                log("拒绝来自 ${requestingDevice.deviceName} 的连接请求")
+                receiver?.rejectConnectionRequest(requestingDevice)
+            }
         }
     }
 
@@ -205,6 +220,21 @@ class P2pController(context: Context) {
             return
         }
 
+        // 连接前必须先停止发现：discoverPeers 与 connect 在部分设备上互斥，
+        // 发现未停就直接 connect 会返回 BUSY 或导致组协商失败。
+        runCatching {
+            mgr.stopPeerDiscovery(ch, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() = doConnect(mgr, ch, config)
+                override fun onFailure(reason: Int) = doConnect(mgr, ch, config)
+            })
+        }.onFailure { log("停止搜索失败：${it.message}") }
+    }
+
+    private fun doConnect(
+        mgr: WifiP2pManager,
+        ch: WifiP2pManager.Channel,
+        config: WifiP2pConfig
+    ) {
         runCatching {
             mgr.connect(ch, config, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() {
