@@ -1,5 +1,6 @@
 package com.example.ptp
 
+import com.example.ptp.transfer.Checksum
 import com.example.ptp.transfer.TransferProtocol
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -100,5 +101,50 @@ class TransferProtocolTest {
             serverThread.join(3000)
             assertEquals("ping", receivedByServer.get(3, TimeUnit.SECONDS))
         }
+    }
+
+    @Test
+    fun fileHeaderRoundTrip() {
+        val buffer = ByteArrayOutputStream()
+        val header = TransferProtocol.FileHeader("测试文档.txt", 123456L, "0123456789abcdef0123456789abcdef")
+        TransferProtocol.writeFileHeader(DataOutputStream(buffer), header)
+
+        val frame = TransferProtocol.readFrame(
+            DataInputStream(ByteArrayInputStream(buffer.toByteArray()))
+        )
+        assertEquals(TransferProtocol.TYPE_FILE_HEADER, frame!!.type)
+
+        val parsed = frame.asFileHeader()
+        assertEquals("测试文档.txt", parsed.fileName)
+        assertEquals(123456L, parsed.fileSize)
+        assertEquals("0123456789ABCDEF0123456789ABCDEF", parsed.md5Hex)
+    }
+
+    @Test
+    fun fileChunkAndEndRoundTrip() {
+        val buffer = ByteArrayOutputStream()
+        val out = DataOutputStream(buffer)
+
+        val chunk = ByteArray(TransferProtocol.CHUNK_SIZE) { (it % 256).toByte() }
+        TransferProtocol.writeFileChunk(out, chunk)
+        TransferProtocol.writeFileEnd(out, chunk.size.toLong())
+
+        val input = DataInputStream(ByteArrayInputStream(buffer.toByteArray()))
+        val chunkFrame = TransferProtocol.readFrame(input)!!
+        assertEquals(TransferProtocol.TYPE_FILE_CHUNK, chunkFrame.type)
+        assertEquals(chunk.size, chunkFrame.payload.size)
+
+        val endFrame = TransferProtocol.readFrame(input)!!
+        assertEquals(TransferProtocol.TYPE_FILE_END, endFrame.type)
+        assertEquals(chunk.size.toLong(), endFrame.asLong())
+    }
+
+    @Test
+    fun md5IsStable() {
+        val bytes = "hello md5".toByteArray()
+        val a = Checksum.md5Hex(bytes)
+        val b = Checksum.md5Hex(ByteArrayInputStream(bytes))
+        assertEquals(a, b)
+        assertEquals(32, a.length)
     }
 }

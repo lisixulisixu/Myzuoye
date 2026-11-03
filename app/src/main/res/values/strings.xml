@@ -33,6 +33,17 @@
     <string name="hint_message">输入要发送的文字</string>
     <string name="channel_not_ready">文本通道还没建立</string>
 
+    <string name="action_pick_file">选择文件</string>
+    <string name="transfer_idle">未在传输</string>
+    <string name="transfer_pick">请选择要发送的文件</string>
+    <string name="transfer_sending">正在发送：%1$s（%2$d%%）</string>
+    <string name="transfer_receiving">正在接收：%1$s（%2$d%%）</string>
+    <string name="transfer_sent_done">已发送：%1$s</string>
+    <string name="transfer_sent_fail">发送失败</string>
+    <string name="transfer_received_done">已保存到：%1$s</string>
+    <string name="transfer_received_fail">接收失败或校验未通过</string>
+    <string name="transfer_busy">已有文件在传输，请稍候</string>
+
     <string name="dialog_permission_title">需要“附近设备”权限</string>
     <string name="dialog_permission_message">搜索和连接附近设备依赖“附近设备”权限，请到系统设置中手动开启后返回本页。</string>
     <string name="action_go_settings">去设置</string>

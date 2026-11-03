@@ -133,6 +133,42 @@
             android:textSize="13sp"
             android:textStyle="bold" />
 
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnPickFile"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minHeight="40dp"
+                android:text="@string/action_pick_file"
+                android:textSize="13sp" />
+
+            <ProgressBar
+                android:id="@+id/pbTransfer"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:layout_weight="1"
+                android:max="100"
+                android:progress="0" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvTransferState"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="@string/transfer_idle"
+            android:textSize="11sp" />
+
         <ScrollView
             android:id="@+id/svChat"
             android:layout_width="match_parent"

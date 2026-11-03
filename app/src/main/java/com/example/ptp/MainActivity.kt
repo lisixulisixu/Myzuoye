@@ -12,6 +12,7 @@ import android.provider.Settings
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -27,12 +28,14 @@ import androidx.recyclerview.widget.RecyclerView
 import com.example.ptp.p2p.P2pController
 import com.example.ptp.transfer.TransferManager
 import com.example.ptp.ui.DeviceAdapter
+import java.io.File
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 /**
  * M1：授权 → 搜索 → 连接 → 显示角色与组主地址。
  * M2：建立连接后自动拉起 TCP 文本通道（组主监听、客户端连接），双向互发文本。
+ * M3：文本通道之上增加单向文件传输（发送方选文件 → 协议头 + 分片 → 接收方落盘 + 进度）。
  */
 class MainActivity : AppCompatActivity() {
 
@@ -54,6 +57,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var svChat: ScrollView
     private lateinit var etMessage: EditText
     private lateinit var btnSend: Button
+
+    private lateinit var btnPickFile: Button
+    private lateinit var pbTransfer: ProgressBar
+    private lateinit var tvTransferState: TextView
+
+    /** 待发送的文件信息：uri + 显示名 + 大小。选完文件后由 pickFileLauncher 填充 */
+    private var pendingUri: Uri? = null
+    private var pendingName: String = ""
+    private var pendingSize: Long = 0
 
     private val logLines = ArrayDeque<String>()
     private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
@@ -85,6 +97,12 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+    private val pickFileLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri == null) return@registerForActivityResult
+            resolveFileInfo(uri)
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -102,6 +120,9 @@ class MainActivity : AppCompatActivity() {
         controller = P2pController(this)
         wireController()
 
+        // M3：接收文件保存到应用私有目录，避开分区存储权限
+        TransferManager.receiveDir = File(filesDir, "received")
+
         btnDiscover.setOnClickListener { startDiscovery(force = true) }
         btnCreateGroup.setOnClickListener { controller.createGroup() }
         btnDisconnect.setOnClickListener {
@@ -110,6 +131,7 @@ class MainActivity : AppCompatActivity() {
         }
         btnSend.setOnClickListener { sendMessage() }
         btnSend.isEnabled = false
+        btnPickFile.setOnClickListener { pickFile() }
 
         if (!controller.isSupported) {
             tvP2pState.setText(R.string.p2p_state_unsupported)
@@ -125,6 +147,10 @@ class MainActivity : AppCompatActivity() {
         // 通道回调只在界面可见时挂载，避免 Activity 泄漏
         TransferManager.onStateChanged = { state, message -> renderChannelState(state, message) }
         TransferManager.onMessage = { line -> appendChat(line) }
+        TransferManager.onReceiveProgress = { progress -> renderReceiveProgress(progress) }
+        TransferManager.onReceiveDone = { path -> renderReceiveDone(path) }
+        TransferManager.onSendProgress = { progress -> renderSendProgress(progress) }
+        TransferManager.onSendDone = { ok -> renderSendDone(ok) }
         renderChat()
         renderChannelState(TransferManager.state, "")
 
@@ -148,6 +174,7 @@ class MainActivity : AppCompatActivity() {
         controller.stop()
         TransferManager.onStateChanged = null
         TransferManager.onMessage = null
+        TransferManager.clearFileCallbacks()
     }
 
     override fun onDestroy() {
@@ -180,6 +207,10 @@ class MainActivity : AppCompatActivity() {
         svChat = findViewById(R.id.svChat)
         etMessage = findViewById(R.id.etMessage)
         btnSend = findViewById(R.id.btnSend)
+
+        btnPickFile = findViewById(R.id.btnPickFile)
+        pbTransfer = findViewById(R.id.pbTransfer)
+        tvTransferState = findViewById(R.id.tvTransferState)
     }
 
     private fun applyWindowInsets() {
@@ -383,6 +414,94 @@ class MainActivity : AppCompatActivity() {
 
     private fun scrollChatToBottom() {
         svChat.post { svChat.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    // ------------------------------------------------------------------ 文件传输
+
+    private fun pickFile() {
+        pickFileLauncher.launch(arrayOf("*/*"))
+    }
+
+    private fun resolveFileInfo(uri: Uri) {
+        val name: String
+        val size: Long
+        try {
+            contentResolver.query(
+                uri,
+                arrayOf(
+                    android.provider.OpenableColumns.DISPLAY_NAME,
+                    android.provider.OpenableColumns.SIZE
+                ),
+                null, null, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    val sizeIdx = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                    name = if (nameIdx >= 0) cursor.getString(nameIdx) else "未命名"
+                    size = if (sizeIdx >= 0) cursor.getLong(sizeIdx) else -1L
+                    pendingUri = uri
+                    pendingName = name
+                    pendingSize = size
+                    log("已选择：$name（$size 字节）")
+                    startSend()
+                    return
+                }
+            }
+        } catch (e: Exception) {
+            log("读取文件信息失败：${e.message}")
+        }
+        toast(getString(R.string.transfer_pick))
+    }
+
+    private fun startSend() {
+        if (!TransferManager.isConnected) {
+            toast(getString(R.string.channel_not_ready))
+            return
+        }
+        val uri = pendingUri ?: return
+        try {
+            val input = contentResolver.openInputStream(uri) ?: run {
+                toast(getString(R.string.transfer_pick))
+                return
+            }
+            val ok = TransferManager.sendFile(input, pendingName, pendingSize)
+            if (!ok) {
+                toast(getString(R.string.transfer_busy))
+            }
+        } catch (e: Exception) {
+            log("打开文件失败：${e.message}")
+            toast(getString(R.string.transfer_pick))
+        }
+    }
+
+    private fun renderReceiveProgress(progress: Float) {
+        val percent = (progress * 100).toInt()
+        pbTransfer.progress = percent
+        tvTransferState.text = getString(R.string.transfer_receiving, percent)
+    }
+
+    private fun renderReceiveDone(path: String?) {
+        pbTransfer.progress = 0
+        if (path != null) {
+            tvTransferState.text = getString(R.string.transfer_received_done, path)
+        } else {
+            tvTransferState.text = getString(R.string.transfer_received_fail)
+        }
+    }
+
+    private fun renderSendProgress(progress: Float) {
+        val percent = (progress * 100).toInt()
+        pbTransfer.progress = percent
+        tvTransferState.text = getString(R.string.transfer_sending, pendingName, percent)
+    }
+
+    private fun renderSendDone(ok: Boolean) {
+        pbTransfer.progress = 0
+        if (ok) {
+            tvTransferState.text = getString(R.string.transfer_sent_done, pendingName)
+        } else {
+            tvTransferState.text = getString(R.string.transfer_sent_fail)
+        }
     }
 
     // ------------------------------------------------------------------ 工具
