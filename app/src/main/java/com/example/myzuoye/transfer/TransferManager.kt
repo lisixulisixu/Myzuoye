@@ -1,6 +1,7 @@
 package com.example.myzuoye.transfer
 
 import android.content.Context
+import android.net.Network
 import android.os.Handler
 import android.os.Looper
 import com.example.myzuoye.service.TransferService
@@ -90,6 +91,19 @@ object TransferManager {
     @Volatile
     private var listening = false
 
+    /**
+     * 要绑定的 P2P 网络。
+     *
+     * 进程级 bindProcessToNetwork 在部分 ROM 上会返回 true 却不生效，
+     * 所以建立 socket 时再显式 bindSocket 一次，确保流量真的从 P2P 网卡走。
+     */
+    @Volatile
+    private var p2pNetwork: Network? = null
+
+    fun setP2pNetwork(network: Network?) {
+        p2pNetwork = network
+    }
+
     @Volatile
     private var socket: Socket? = null
 
@@ -175,18 +189,26 @@ object TransferManager {
     private fun bindWithRetry(port: Int): ServerSocket {
         var lastError: Exception? = null
         repeat(BIND_RETRIES) { attempt ->
-            val ss = ServerSocket()
+            var ss: ServerSocket? = null
             try {
+                ss = ServerSocket()
                 ss.reuseAddress = true
                 ss.bind(InetSocketAddress(port))
                 return ss
             } catch (e: Exception) {
                 lastError = e
-                runCatching { ss.close() }
+                runCatching { ss?.close() }
                 Thread.sleep(BIND_RETRY_DELAY_MS)
             }
         }
         throw lastError ?: IllegalStateException("bind 失败")
+    }
+
+    /** 把客户端 socket 显式绑到 P2P 网络，保证流量从 P2P 网卡出去 */
+    private fun bindToP2pNetwork(socket: Socket) {
+        val net = p2pNetwork ?: return
+        runCatching { net.bindSocket(socket) }
+            .onFailure { emit(State.CONNECTING, "绑定 P2P 网络失败：${it.message}") }
     }
 
     // ------------------------------------------------------------------ 客户端
@@ -213,6 +235,7 @@ object TransferManager {
                 }
                 try {
                     val client = Socket()
+                    bindToP2pNetwork(client)
                     client.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
                     emit(State.CONNECTED, "已连接到 $host:$port")
                     readLoop(client)

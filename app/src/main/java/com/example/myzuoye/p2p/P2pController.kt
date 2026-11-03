@@ -3,7 +3,9 @@ package com.example.myzuoye.p2p
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.IntentFilter
+import android.net.ConnectivityManager
 import android.net.MacAddress
+import android.net.Network
 import android.net.wifi.WpsInfo
 import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pDevice
@@ -12,7 +14,9 @@ import android.net.wifi.p2p.WifiP2pManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
+import java.net.Inet4Address
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -56,6 +60,12 @@ class P2pController(context: Context) {
     /** 连接最终失败（含重试后仍失败），用于清掉界面上的“连接中”标记 */
     var onConnectFailed: ((String) -> Unit)? = null
 
+    /** 搜索失败（reason 为 WifiP2pManager 的错误码），界面据此做退避重试 */
+    var onDiscoveryFailed: ((Int) -> Unit)? = null
+
+    /** P2P 网络绑定完成，参数是绑定到的 [Network]，供传输层做 socket 级绑定 */
+    var onP2pNetworkBound: ((Network) -> Unit)? = null
+
     private val appContext = context.applicationContext
     private val manager: WifiP2pManager? =
         appContext.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
@@ -79,6 +89,15 @@ class P2pController(context: Context) {
 
     /** connect 前 stopPeerDiscovery 的兜底回调，防止个别 ROM 不回调导致点设备没反应 */
     private var connectFallback: Runnable? = null
+
+    private val connectivityManager: ConnectivityManager? =
+        appContext.getSystemService(ConnectivityManager::class.java)
+
+    /** 当前绑定到的 P2P 网络（用于断开时解绑） */
+    private var p2pNetwork: Network? = null
+
+    /** 轮询等待 P2P 网络注册的 Runnable（用于取消） */
+    private var networkPollRunnable: Runnable? = null
 
     val isSupported: Boolean get() = manager != null
 
@@ -182,6 +201,9 @@ class P2pController(context: Context) {
     fun release() {
         connectFallback?.let { mainHandler.removeCallbacks(it) }
         connectFallback = null
+        networkPollRunnable?.let { mainHandler.removeCallbacks(it) }
+        networkPollRunnable = null
+        unbindP2pNetwork()
         stop()
         runCatching { channel?.close() }
         channel = null
@@ -216,17 +238,13 @@ class P2pController(context: Context) {
                 override fun onFailure(reason: Int) {
                     discovering = false
                     if (reason == WifiP2pManager.BUSY) {
-                        // 系统里还有残留的搜索流程，这时才需要先停再搜
-                        log("系统忙，重置搜索状态后重试…")
-                        runCatching {
-                            mgr.stopPeerDiscovery(ch, object : WifiP2pManager.ActionListener {
-                                override fun onSuccess() = discover(mgr, ch)
-                                override fun onFailure(r: Int) = discover(mgr, ch)
-                            })
-                        }.onFailure { log("重置搜索失败：${it.message}") }
+                        // 系统仍在处理上一次搜索/连接。这里**不要**再 stop→discover 硬撞：
+                        // 那会让系统一直停在“重置中”，越试越忙。交给界面按退避策略稍后重试。
+                        log("系统忙，搜索稍后自动重试")
                     } else {
                         log("搜索失败：${reasonText(reason)}")
                     }
+                    onDiscoveryFailed?.invoke(reason)
                 }
             })
         } catch (e: SecurityException) {
@@ -238,23 +256,6 @@ class P2pController(context: Context) {
         val (mgr, ch) = requireChannel() ?: return
         discovering = false
         runCatching { mgr.stopPeerDiscovery(ch, null) }
-    }
-
-    private fun discover(mgr: WifiP2pManager, ch: WifiP2pManager.Channel) {
-        runCatching {
-            mgr.discoverPeers(ch, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() {
-                    discovering = true
-                    log("开始搜索附近设备…")
-                    requestPeers()
-                }
-
-                override fun onFailure(reason: Int) {
-                    discovering = false
-                    log("搜索失败：${reasonText(reason)}")
-                }
-            })
-        }.onFailure { log("搜索异常：${it.message}") }
     }
 
     /** 主动刷新一次设备列表 */
@@ -283,11 +284,17 @@ class P2pController(context: Context) {
             return
         }
 
-        // 连接前必须先停止发现：discoverPeers 与 connect 在部分设备上互斥，
-        // 发现未停就直接 connect 会返回 BUSY 或导致组协商失败。
-        withDiscoveryStopped(mgr, ch, "停止搜索超时，直接发起连接") {
-            doConnect(mgr, ch, config)
-        }
+        // 这里**不要**先 stopPeerDiscovery。
+        //
+        // 实测（Android 17 模拟器）日志：
+        //   P2P-DEVICE-LOST p2p_dev_addr=...
+        //   WifiP2pService: Dropping connect request
+        // 停搜索会把已发现的设备从系统缓存里清掉，紧接着的 connect 会因为
+        // “目标设备不在已知列表”被系统直接丢弃，表现就是「内部错误」。
+        //
+        // 标准写法是 requestPeers → connect，搜索过程本身不阻碍连接；
+        // 只有真的返回 BUSY（多是残留分组）才需要清理后重试。
+        doConnect(mgr, ch, config)
     }
 
     private fun doConnect(
@@ -304,15 +311,17 @@ class P2pController(context: Context) {
 
                 override fun onFailure(reason: Int) {
                     // BUSY 多半是上一次失败留下残连接，自动清理后重试一次，
-                    // 免得用户还得手动点“断开”再来一遍
+                    // 免得用户还得手动点“断开”再来一遍。
+                    // 注意这里不能再 stopPeerDiscovery —— 那会把设备缓存清掉，
+                    // 重试的 connect 又会被系统判定为“未知设备”而丢弃。
                     if (reason == WifiP2pManager.BUSY && !retried) {
                         log("系统忙，清理残留连接后重试…")
                         runCatching {
                             mgr.cancelConnect(ch, object : WifiP2pManager.ActionListener {
-                                override fun onSuccess() = doConnect(mgr, ch, config, true)
-                                override fun onFailure(r: Int) = doConnect(mgr, ch, config, true)
+                                override fun onSuccess() = retryConnectSoon(mgr, ch, config)
+                                override fun onFailure(r: Int) = retryConnectSoon(mgr, ch, config)
                             })
-                        }.onFailure { doConnect(mgr, ch, config, true) }
+                        }.onFailure { retryConnectSoon(mgr, ch, config) }
                         return
                     }
 
@@ -327,13 +336,27 @@ class P2pController(context: Context) {
         }
     }
 
+    /** 清完残留连接后稍微等一下再重试，让系统状态落定 */
+    private fun retryConnectSoon(
+        mgr: WifiP2pManager,
+        ch: WifiP2pManager.Channel,
+        config: WifiP2pConfig
+    ) {
+        mainHandler.postDelayed(
+            { doConnect(mgr, ch, config, retried = true) },
+            CONNECT_RETRY_DELAY_MS
+        )
+    }
+
     /**
      * 先停掉正在进行的设备发现，再执行 [action]。
      *
-     * 为什么需要：discoverPeers 与 connect / createGroup 在部分机型上互斥，
-     * 发现没停就发起操作会直接 BUSY。
-     * 为什么要有兜底：个别 ROM 的 stopPeerDiscovery 回调不返回，若一直等就表现为
-     * 「点了设备没反应」，所以超时后照常执行 [action]。
+     * 只用于 [createGroup] 这类「不需要目标设备」的操作 —— 停搜索会把已发现的
+     * 设备从系统缓存里清掉，紧接着按地址 connect 会被系统当成未知设备丢弃
+     * （日志里的 `Dropping connect request`），所以连接路径绝对不能用它。
+     *
+     * 为什么要有超时兜底：个别 ROM 的 stopPeerDiscovery 回调不返回，
+     * 一直等就表现为「点了没反应」，超时后照常执行 [action]。
      */
     private fun withDiscoveryStopped(
         mgr: WifiP2pManager,
@@ -393,9 +416,107 @@ class P2pController(context: Context) {
         }
     }
 
+    /**
+     * 把本进程绑定到 P2P 网络，之后再建 TCP 通道。
+     *
+     * 为什么必须做：Android 10 起每个网络有独立 netId 与路由表，进程默认走系统
+     * **默认网络**（Wi-Fi / 移动数据）。默认网络的路由表里没有 192.168.49.0/24，
+     * 于是连 192.168.49.1:8988 的包会从默认网卡发出去，直接超时 ——
+     * 现象正是「P2P 组已建立、ping 也通，但 TCP 死活连不上」。
+     *
+     * 拿 P2P 网络的方式：遍历 [ConnectivityManager.getAllNetworks]，找出网卡地址落在
+     * P2P 网段（192.168.49.0/24）的那个。它通常带 LOCAL_NETWORK 能力、不带 INTERNET，
+     * 所以不会成为默认网络，必须显式绑定。
+     *
+     * P2P 组的网络注册到系统有延迟，所以这里轮询等待，并带总超时兜底。
+     */
+    fun prepareP2pNetwork(onReady: () -> Unit) {
+        if (Build.VERSION.SDK_INT < API_29) {
+            onReady()
+            return
+        }
+        // 已经绑定过就直接继续，避免连接状态广播重复触发时反复处理
+        if (p2pNetwork != null) {
+            onReady()
+            return
+        }
+        val cm = connectivityManager
+        if (cm == null) {
+            onReady()
+            return
+        }
+
+        val done = AtomicBoolean(false)
+
+        fun finish() {
+            if (!done.compareAndSet(false, true)) return
+            networkPollRunnable?.let { mainHandler.removeCallbacks(it) }
+            networkPollRunnable = null
+            onReady()
+        }
+
+        val deadline = SystemClock.elapsedRealtime() + NETWORK_READY_TIMEOUT_MS
+
+        fun poll() {
+            if (done.get()) return
+
+            val net = findP2pNetwork()
+            if (net != null) {
+                val bound = runCatching { cm.bindProcessToNetwork(net) }
+                    .getOrDefault(false)
+                if (bound) {
+                    p2pNetwork = net
+                    // 读回来确认绑定是否真的生效：部分 ROM 会返回 true 但实际没绑上
+                    val actual = runCatching { cm.boundNetworkForProcess }.getOrNull()
+                    log("已绑定 P2P 网络（进程默认网络=$actual）")
+                    onP2pNetworkBound?.invoke(net)
+                } else {
+                    log("绑定 P2P 网络失败，按默认网络尝试")
+                }
+                finish()
+                return
+            }
+
+            if (SystemClock.elapsedRealtime() >= deadline) {
+                log("未找到 P2P 网络，按默认网络尝试")
+                finish()
+                return
+            }
+
+            val next = Runnable { poll() }
+            networkPollRunnable = next
+            mainHandler.postDelayed(next, NETWORK_POLL_INTERVAL_MS)
+        }
+
+        poll()
+    }
+
+    /** 找出地址落在 P2P 网段的那个网络 */
+    private fun findP2pNetwork(): Network? {
+        val cm = connectivityManager ?: return null
+        return runCatching {
+            cm.allNetworks.firstOrNull { net ->
+                val link = cm.getLinkProperties(net) ?: return@firstOrNull false
+                link.linkAddresses.any { addr ->
+                    val ip = addr.address
+                    ip is Inet4Address &&
+                        ip.hostAddress?.startsWith(P2P_SUBNET_PREFIX) == true
+                }
+            }
+        }.getOrNull()
+    }
+
+    /** 解绑 P2P 网络，恢复默认网络 */
+    private fun unbindP2pNetwork() {
+        if (p2pNetwork == null) return
+        runCatching { connectivityManager?.bindProcessToNetwork(null) }
+        p2pNetwork = null
+    }
+
     /** 断开：取消正在进行的连接 + 移除分组 */
     fun disconnect() {
         val (mgr, ch) = requireChannel() ?: return
+        unbindP2pNetwork()
         runCatching {
             mgr.cancelConnect(ch, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() = Unit
@@ -472,7 +593,22 @@ class P2pController(context: Context) {
         /** Android 16 / API 36 */
         const val API_36 = 36
 
+        /** Android 10 / API 29：requestNetwork / bindProcessToNetwork 从这版开始可用 */
+        const val API_29 = 29
+
         /** stopPeerDiscovery 的兜底超时：到点不再等回调，直接执行后续动作 */
         const val STOP_DISCOVERY_TIMEOUT_MS = 800L
+
+        /** 清理残留连接后，等这么久再重试 connect */
+        const val CONNECT_RETRY_DELAY_MS = 300L
+
+        /** 等 P2P 网络就绪的兜底超时 */
+        const val NETWORK_READY_TIMEOUT_MS = 1500L
+
+        /** 轮询 P2P 网络注册的间隔 */
+        const val NETWORK_POLL_INTERVAL_MS = 150L
+
+        /** Wi-Fi Direct 组网固定使用的网段前缀 */
+        const val P2P_SUBNET_PREFIX = "192.168.49."
     }
 }

@@ -87,6 +87,9 @@ class MainActivity : AppCompatActivity() {
     /** 上一次的设备数量，用于日志降噪（列表刷新很频繁） */
     private var lastPeerCount = -1
 
+    /** 搜索失败后的退避截止时间，避免对着 BUSY 硬撞 */
+    private var discoveryBackoffUntil = 0L
+
     /** P2P 组是否已建立 */
     private var p2pConnected = false
 
@@ -105,12 +108,15 @@ class MainActivity : AppCompatActivity() {
     private val discoveryLoop = object : Runnable {
         override fun run() {
             if (controller.isSupported && !p2pConnected && !connecting && hasNearbyPermission()) {
-                if (controller.isDiscovering) {
-                    controller.requestPeers()
-                } else {
-                    // 绕过按钮的防抖，但保留一次最小间隔
-                    lastDiscoverAt = 0L
-                    startDiscovery()
+                when {
+                    // 刚失败过：先退避，别对着系统的 BUSY 硬撞
+                    SystemClock.elapsedRealtime() < discoveryBackoffUntil -> Unit
+                    controller.isDiscovering -> controller.requestPeers()
+                    else -> {
+                        // 绕过按钮的防抖，但保留一次最小间隔
+                        lastDiscoverAt = 0L
+                        startDiscovery()
+                    }
                 }
             }
             uiHandler.postDelayed(this, DISCOVERY_KEEPALIVE_MS)
@@ -317,6 +323,7 @@ class MainActivity : AppCompatActivity() {
             p2pConnected = false
             connecting = false
             adapter.setConnecting(null)
+            TransferManager.setP2pNetwork(null)
             tvRoleInfo.setText(R.string.role_unknown)
             // 这里不主动关通道：P2P 链路断开时 socket 会自己报错退出，
             // 而组主的监听保留下来，下次重新组网可以直接复用。
@@ -327,6 +334,19 @@ class MainActivity : AppCompatActivity() {
             adapter.setConnecting(null)
             tvP2pState.setText(R.string.p2p_state_ready)
             toast("连接失败：$reason")
+        }
+
+        controller.onDiscoveryFailed = { reason ->
+            if (reason == android.net.wifi.p2p.WifiP2pManager.BUSY) {
+                // 系统还在忙上一次搜索/连接，退避一段时间再试，
+                // 否则每几秒撞一次会让系统一直停在“忙”的状态
+                discoveryBackoffUntil = SystemClock.elapsedRealtime() + DISCOVERY_BUSY_BACKOFF_MS
+            }
+        }
+
+        // 拿到 P2P 网络后交给传输层做 socket 级绑定（进程级绑定在部分 ROM 上不生效）
+        controller.onP2pNetworkBound = { network ->
+            TransferManager.setP2pNetwork(network)
         }
 
         controller.onDiscoveryChanged = { discovering ->
@@ -428,15 +448,19 @@ class MainActivity : AppCompatActivity() {
         adapter.clear()
         tvPeerHint.setText(R.string.nearby_devices_zero)
 
-        // M2：组网完成后立刻拉起 TCP 通道
-        if (info.isGroupOwner) {
-            TransferManager.startServer()
-        } else {
-            val host = info.groupOwnerAddress?.hostAddress
-            if (host.isNullOrBlank()) {
-                log("组主地址未知，无法建立文本通道")
+        // M2：组网完成后拉起 TCP 通道。
+        // 但必须先把这个进程绑到 P2P 网络 —— Android 10+ 的默认网络路由表里
+        // 没有 192.168.49.0/24，不绑定的话 TCP 包会从 Wi-Fi/数据网卡发出去直接超时。
+        controller.prepareP2pNetwork {
+            if (info.isGroupOwner) {
+                TransferManager.startServer()
             } else {
-                TransferManager.connect(host)
+                val host = info.groupOwnerAddress?.hostAddress
+                if (host.isNullOrBlank()) {
+                    log("组主地址未知，无法建立文本通道")
+                } else {
+                    TransferManager.connect(host)
+                }
             }
         }
     }
@@ -462,6 +486,7 @@ class MainActivity : AppCompatActivity() {
                 when (which) {
                     0 -> {
                         TransferManager.stop()
+                        TransferManager.setP2pNetwork(null)
                         TransferManager.startServer()
                         log("调试：开始监听 ${TransferManager.port}")
                     }
@@ -501,6 +526,9 @@ class MainActivity : AppCompatActivity() {
                     port = TransferManager.port
                 }
                 TransferManager.stop()
+                // 调试通道走的是 loopback / adb 转发，不属于 P2P 网络，
+                // 绑着 P2P 网络反而连不通，这里先解绑
+                TransferManager.setP2pNetwork(null)
                 log("调试：连接 $host:$port")
                 TransferManager.connect(host, port)
             }
@@ -674,6 +702,9 @@ class MainActivity : AppCompatActivity() {
 
         /** 自动续搜的检查间隔：系统搜索会自动停止，停了就靠这个把它拉起来 */
         const val DISCOVERY_KEEPALIVE_MS = 6000L
+
+        /** 搜索遇到 BUSY（系统忙）时的退避时长 */
+        const val DISCOVERY_BUSY_BACKOFF_MS = 15000L
 
         const val MAX_LOG_LINES = 4
 
