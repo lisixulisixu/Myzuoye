@@ -77,6 +77,8 @@
     <string name="game_transfer_done">已发送：%1$s</string>
     <string name="game_transfer_fail">发送失败：%1$s</string>
     <string name="game_transfer_idle">准备传输…</string>
+    <string name="game_idle_info">休闲模式 · 随便玩玩</string>
+    <string name="game_play">玩游戏</string>
     <string name="game_over">游戏结束，跳过 %1$d 个障碍物</string>
     <string name="game_tap_restart">点击画面重新开始</string>
     <string name="game_back_confirm_title">退出小游戏</string>

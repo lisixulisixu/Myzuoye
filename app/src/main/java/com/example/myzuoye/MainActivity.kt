@@ -53,6 +53,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnDiscover: Button
     private lateinit var btnCreateGroup: Button
     private lateinit var btnDisconnect: Button
+    private lateinit var btnPlayGame: Button
 
     private lateinit var tvChannelState: TextView
     private lateinit var tvChat: TextView
@@ -185,6 +186,7 @@ class MainActivity : AppCompatActivity() {
         btnViewFiles.setOnClickListener {
             startActivity(Intent(this, ReceivedFilesActivity::class.java))
         }
+        btnPlayGame.setOnClickListener { openGameForFun() }
 
         // 调试入口：长按通道状态可手动起监听 / 连接，不依赖 P2P（模拟器可测）
         tvChannelState.setOnLongClickListener {
@@ -274,6 +276,7 @@ class MainActivity : AppCompatActivity() {
         btnDiscover = findViewById(R.id.btnDiscover)
         btnCreateGroup = findViewById(R.id.btnCreateGroup)
         btnDisconnect = findViewById(R.id.btnDisconnect)
+        btnPlayGame = findViewById(R.id.btnPlayGame)
 
         tvChannelState = findViewById(R.id.tvChannelState)
         tvChat = findViewById(R.id.tvChat)
@@ -730,6 +733,14 @@ class MainActivity : AppCompatActivity() {
         game.show()
         // 立即显示初始状态
         game.onProgress(fileName, 0f)
+    }
+
+    /** 平时娱乐入口：无传输信息，只玩游戏 */
+    private fun openGameForFun() {
+        if (transferGame?.isShowing() == true) return
+        val game = TransferGame(this)
+        transferGame = game
+        game.showIdle()
     }
 
     private fun renderReceiveProgress(progress: Float) {

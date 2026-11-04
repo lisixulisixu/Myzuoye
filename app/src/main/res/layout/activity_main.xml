@@ -104,6 +104,19 @@
             android:paddingHorizontal="4dp"
             android:text="@string/action_disconnect"
             android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/btnPlayGame"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginHorizontal="4dp"
+            android:layout_weight="1"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:minHeight="40dp"
+            android:paddingHorizontal="4dp"
+            android:text="@string/game_play"
+            android:textSize="13sp" />
     </LinearLayout>
 
     <TextView

@@ -38,7 +38,16 @@ class TransferGame(private val context: Context) {
     /** 传输是否已完成（完成后「确定」变成真正关闭窗口） */
     private var transferDone = false
 
+    /** 是否处于「休闲模式」（无传输，平时玩的窗口） */
+    private var idleMode = false
+
     fun isShowing(): Boolean = dialog?.isShowing == true
+
+    /** 平时娱乐入口：无传输信息，只玩 */
+    fun showIdle() {
+        idleMode = true
+        show()
+    }
 
     fun show() {
         if (isShowing()) return
@@ -57,6 +66,12 @@ class TransferGame(private val context: Context) {
         tvOverlay = view.findViewById(R.id.tvOverlayHint)
         val btnBack = view.findViewById<Button>(R.id.btnGameBack)
         btnConfirm = view.findViewById(R.id.btnGameConfirm)
+
+        // 休闲模式：隐藏传输进度条，①区只显示一句提示
+        if (idleMode) {
+            pbTransfer?.visibility = View.GONE
+            tvInfo?.text = context.getString(R.string.game_idle_info)
+        }
 
         gameView?.onScoreChanged = { score ->
             tvScore?.text = context.getString(R.string.game_score, score)
@@ -94,17 +109,17 @@ class TransferGame(private val context: Context) {
         gameView?.start()
     }
 
-    /** 更新顶部①区：文件名 + 进度 */
+    /** 更新顶部①区：文件名 + 进度（休闲模式下不生效） */
     fun onProgress(fileName: String, progress: Float) {
-        if (!isShowing()) return
+        if (!isShowing() || idleMode) return
         val pct = (progress.coerceIn(0f, 1f) * 100).toInt()
         pbTransfer?.progress = pct
         tvInfo?.text = context.getString(R.string.game_transfer_info, fileName, pct)
     }
 
-    /** 传输完成：进度拉满，显示已发送，标记完成（「确定」可关闭） */
+    /** 传输完成：进度拉满，显示已发送，标记完成（「确定」可关闭）。休闲模式下不生效 */
     fun onDone(fileName: String, ok: Boolean) {
-        if (!isShowing()) return
+        if (!isShowing() || idleMode) return
         transferDone = true
         pbTransfer?.progress = 100
         tvInfo?.text = if (ok) {
