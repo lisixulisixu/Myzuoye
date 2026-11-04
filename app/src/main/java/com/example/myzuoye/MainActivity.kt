@@ -31,7 +31,6 @@ import androidx.recyclerview.widget.RecyclerView
 import com.example.myzuoye.p2p.P2pController
 import com.example.myzuoye.transfer.TransferManager
 import com.example.myzuoye.ui.DeviceAdapter
-import java.io.File
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
@@ -166,8 +165,7 @@ class MainActivity : AppCompatActivity() {
         controller = P2pController(this)
         wireController()
 
-        // M3：接收文件保存到应用私有目录，避开分区存储权限
-        TransferManager.receiveDir = File(filesDir, "received")
+        // M3：接收文件保存到公共「下载/WiFi直传」目录，由 ReceivedFileStore 按版本选择实现
         // M4：attach 应用上下文，供前台服务保活使用
         TransferManager.attach(this)
 
@@ -370,12 +368,20 @@ class MainActivity : AppCompatActivity() {
      * 早前只判断 NEARBY_WIFI_DEVICES，在 Android 7~12 上该权限并不存在，
      * checkSelfPermission 恒返回拒绝，导致老系统手机直接卡在“无权限”、搜不到设备。
      */
-    private fun requiredPermissions(): Array<String> =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    private fun requiredPermissions(): Array<String> = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
             arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
-        } else {
+
+        // Android 10~12：搜索仍需定位权限，但写下载目录不再需要存储权限
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ->
             arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
+
+        // Android 9 及以下：额外需要存储权限，否则文件存不进公共下载目录
+        else -> arrayOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.WRITE_EXTERNAL_STORAGE
+        )
+    }
 
     private fun hasNearbyPermission(): Boolean = requiredPermissions().all {
         ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED

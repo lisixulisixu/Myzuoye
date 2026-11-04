@@ -52,9 +52,10 @@ P2P 组网完成后自动建立：组主（`192.168.49.1`）作服务端监听 `
 | `0x04` | 结束 | 已发送字节总数(long) |
 | `0x05` | 取消 | 空 |
 
-发送方用系统文件选择器（SAF）选文件，先算 MD5 再逐片发送；接收方落盘到应用私有目录
-（`filesDir/received`），传输结束后核对大小与 MD5，不一致则丢弃。当前为单向发送，
-双向/多文件待后续迭代。
+发送方用系统文件选择器（SAF）选文件，先算 MD5 再逐片发送；接收方落盘到系统「下载/WiFi直传」
+目录（Android 10+ 走 MediaStore，9 及以下写外部存储 Download），重名自动加 `(1)`、`(2)` 不覆盖。
+接收时边收边算 MD5，结束后核对大小与 MD5，不一致则删除（MediaStore 的 IS_PENDING 保证
+半截文件不会露出来）。当前为单向发送，双向/多文件待后续迭代。
 
 ## 前台服务保活（M4）
 
@@ -95,5 +96,5 @@ adb -s emulator-5556 reverse tcp:18989 tcp:18988
 
 ```bash
 adb -s emulator-5556 shell md5sum /sdcard/Pictures/xxx.jpg
-adb -s emulator-5554 shell "run-as com.example.myzuoye md5sum files/received/xxx.jpg"
+adb -s emulator-5554 shell md5sum "/sdcard/Download/WiFi直传/xxx.jpg"
 ```

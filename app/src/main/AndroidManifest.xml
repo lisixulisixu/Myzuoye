@@ -13,6 +13,9 @@
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="tiramisu" />
+    <!-- Android 9 及以下写公共「下载」目录需要；10 起改用 MediaStore，无需此权限 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
 
     <!-- M4：前台服务（数据传输保活），Android 14+ 需声明类型 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

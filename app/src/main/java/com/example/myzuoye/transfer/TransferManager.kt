@@ -16,12 +16,11 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.DataInputStream
 import java.io.DataOutputStream
-import java.io.File
-import java.io.FileOutputStream
 import java.io.InputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.security.MessageDigest
 
 /**
  * TCP 文本通道。
@@ -35,9 +34,6 @@ import java.net.Socket
  * （M4 会再包一层前台 Service）。
  */
 object TransferManager {
-
-    /** 接收方保存文件到哪个目录（应用私有目录，避开分区存储权限） */
-    lateinit var receiveDir: File
 
     /** 应用上下文，用于控制前台服务（保活）。由 MainActivity 初始化 */
     private var appContext: Context? = null
@@ -113,9 +109,15 @@ object TransferManager {
 
     private val messageBuffer = mutableListOf<String>()
 
-    /** 正在接收的文件写入流；同一时刻只允许一个接收任务 */
-    private var receiveFile: File? = null
-    private var receiveStream: FileOutputStream? = null
+    /**
+     * 正在接收的文件落盘目标；同一时刻只允许一个接收任务。
+     * 具体写公共下载目录还是应用目录，由 [ReceivedFileStore] 按系统版本决定。
+     */
+    private var receiveTarget: ReceiveTarget? = null
+
+    /** 边收边算 MD5，避免收完再整读一遍（MediaStore 的 Uri 也不方便当 File 读） */
+    private var receiveDigest: MessageDigest? = null
+
     private var receiveRemaining: Long = 0
     private var receiveTotal: Long = 0
     private var receiveMd5: String = ""
@@ -371,27 +373,24 @@ object TransferManager {
             return
         }
 
-        // 打开临时文件
-        receiveDir.mkdirs()
-        val safeName = sanitizeFileName(header.fileName)
-        val file = File(receiveDir, safeName)
-        val stream = try {
-            FileOutputStream(file)
-        } catch (e: Exception) {
-            appendAndNotify("无法创建接收文件，已忽略本次传输：${e.message}")
+        // 落到公共下载目录（Android 10+ 走 MediaStore），重名自动加序号
+        val context = appContext
+        val target = if (context == null) null else ReceivedFileStore.create(context, header.fileName)
+        if (target == null) {
+            appendAndNotify("无法创建接收文件（存储不可用或无权限），已忽略本次传输")
             receiveDiscarding = true
             return
         }
 
-        receiveFile = file
-        receiveStream = stream
+        receiveTarget = target
+        receiveDigest = MessageDigest.getInstance("MD5")
         receiveDiscarding = false
         receivingFileName = header.fileName
         receiveTotal = header.fileSize
         receiveRemaining = header.fileSize
         receiveMd5 = header.md5Hex
 
-        appendAndNotify("收到文件：${header.fileName}（${formatSize(header.fileSize)}）")
+        appendAndNotify("收到文件：${header.fileName}（${formatSize(header.fileSize)}），保存到 ${target.displayPath}")
         mainHandler.post { onReceiveProgress?.invoke(0f) }
         startService("接收 ${header.fileName}", 0, 100)
     }
@@ -400,13 +399,14 @@ object TransferManager {
         // 已放弃本次传输：继续丢弃分片，直到收到结束帧
         if (receiveDiscarding) return
 
-        val stream = receiveStream ?: run {
+        val target = receiveTarget ?: run {
             appendAndNotify("收到分片但未收到文件头，已忽略")
             receiveDiscarding = true
             return
         }
         try {
-            stream.write(frame.payload)
+            target.write(frame.payload)
+            receiveDigest?.update(frame.payload)
             receiveRemaining -= frame.payload.size
             val total = receiveTotal
             val progress = if (total > 0) {
@@ -443,14 +443,13 @@ object TransferManager {
             return
         }
 
-        val file = receiveFile
-        val stream = receiveStream
-        receiveFile = null
-        receiveStream = null
+        val target = receiveTarget
+        val digest = receiveDigest
+        receiveTarget = null
+        receiveDigest = null
         receivingFileName = ""
-        runCatching { stream?.close() }
 
-        if (file == null) {
+        if (target == null) {
             appendAndNotify("收到结束帧但没有正在接收的文件，已忽略")
             return
         }
@@ -458,36 +457,36 @@ object TransferManager {
         // 完整性核对
         // 注意：协议里 MD5 以大写十六进制传输，而 Checksum.md5Hex 返回小写，
         // 必须忽略大小写比较，否则永远不相等。
-        val sizeOk = file.length() == received && file.length() == receiveTotal
-        val md5Ok = if (receiveMd5.isNotEmpty()) {
-            file.inputStream().use {
-                Checksum.md5Hex(it).equals(receiveMd5, ignoreCase = true)
-            }
+        val written = target.written
+        val actualMd5 = digest?.digest()?.joinToString("") { "%02X".format(it) }.orEmpty()
+        val sizeOk = written == received && written == receiveTotal
+        val md5Ok = if (receiveMd5.isNotEmpty() && actualMd5.isNotEmpty()) {
+            actualMd5.equals(receiveMd5, ignoreCase = true)
         } else {
             true
         }
         val ok = sizeOk && md5Ok
 
-        val donePath = if (ok) file.absolutePath else null
         if (ok) {
-            appendAndNotify("文件接收完成：${file.name}")
-            mainHandler.post { onReceiveDone?.invoke(donePath) }
+            target.commit()
+            appendAndNotify("文件接收完成：${target.fileName}，已保存到 ${target.displayPath}")
+            mainHandler.post { onReceiveDone?.invoke(target.displayPath) }
         } else {
             appendAndNotify(
                 "文件校验失败，已丢弃（大小 $sizeOk，MD5 $md5Ok，" +
-                    "收到 ${file.length()} / 声明 $receiveTotal / 结束帧 $received）"
+                    "收到 $written / 声明 $receiveTotal / 结束帧 $received）"
             )
-            runCatching { file.delete() }
+            target.discard()
             mainHandler.post { onReceiveDone?.invoke(null) }
         }
         stopService()
     }
 
     private fun handleFileCancel() {
-        val file = receiveFile
+        val target = receiveTarget
         abortReceive()
-        if (file != null) {
-            runCatching { file.delete() }
+        if (target != null) {
+            target.discard()
             appendAndNotify("对方取消了传输")
             mainHandler.post { onReceiveDone?.invoke(null) }
             stopService()
@@ -495,9 +494,10 @@ object TransferManager {
     }
 
     private fun abortReceive() {
-        runCatching { receiveStream?.close() }
-        receiveStream = null
-        receiveFile = null
+        // 未完成的目标直接丢弃，不在下载目录里留下半截文件
+        runCatching { receiveTarget?.discard() }
+        receiveTarget = null
+        receiveDigest = null
         receiveRemaining = 0
         receiveTotal = 0
         receiveMd5 = ""
@@ -598,13 +598,6 @@ object TransferManager {
     val isSending: Boolean get() = sending
 
     // ------------------------------------------------------------------ 内部
-
-    private fun sanitizeFileName(raw: String): String {
-        var name = raw.replace('\\', '_').replace('/', '_')
-        name = name.trim()
-        if (name.isEmpty() || name == "." || name == "..") name = "received_file"
-        return name
-    }
 
     private fun formatSize(bytes: Long): String = when {
         bytes >= 1024 * 1024 -> "%.1f MB".format(bytes / 1024.0 / 1024.0)
