@@ -61,6 +61,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSend: Button
 
     private lateinit var btnPickFile: Button
+    private lateinit var btnViewFiles: Button
     private lateinit var pbTransfer: ProgressBar
     private lateinit var tvTransferState: TextView
 
@@ -178,6 +179,9 @@ class MainActivity : AppCompatActivity() {
         btnSend.setOnClickListener { sendMessage() }
         btnSend.isEnabled = false
         btnPickFile.setOnClickListener { pickFile() }
+        btnViewFiles.setOnClickListener {
+            startActivity(Intent(this, ReceivedFilesActivity::class.java))
+        }
 
         // 调试入口：长按通道状态可手动起监听 / 连接，不依赖 P2P（模拟器可测）
         tvChannelState.setOnLongClickListener {
@@ -266,6 +270,7 @@ class MainActivity : AppCompatActivity() {
         btnSend = findViewById(R.id.btnSend)
 
         btnPickFile = findViewById(R.id.btnPickFile)
+        btnViewFiles = findViewById(R.id.btnViewFiles)
         pbTransfer = findViewById(R.id.pbTransfer)
         tvTransferState = findViewById(R.id.tvTransferState)
     }

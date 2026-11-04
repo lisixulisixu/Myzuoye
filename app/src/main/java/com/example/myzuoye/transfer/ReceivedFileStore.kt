@@ -2,6 +2,7 @@ package com.example.myzuoye.transfer
 
 import android.Manifest
 import android.content.ContentResolver
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
@@ -73,6 +74,74 @@ object ReceivedFileStore {
             createInDownloads(context, safeName)
         } else {
             createLegacy(context, safeName)
+        }
+    }
+
+    /** 一条已接收文件的信息，用于列表展示 */
+    data class ReceivedFile(
+        val name: String,
+        val sizeBytes: Long,
+        val dateModifiedMillis: Long,
+        val uri: Uri
+    )
+
+    /**
+     * 列出「下载/WiFi直传」目录下的所有文件，按修改时间倒序（新的在前）。
+     *
+     * 只读操作，任何异常都吞掉并返回空列表——查看功能不该因为某个文件损坏而崩溃。
+     */
+    fun list(context: Context): List<ReceivedFile> = runCatching {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            listFromMediaStore(context)
+        } else {
+            listLegacy(context)
+        }
+    }.getOrDefault(emptyList())
+
+    private fun listFromMediaStore(context: Context): List<ReceivedFile> {
+        val resolver = context.contentResolver
+        val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        val relativePath = "${Environment.DIRECTORY_DOWNLOADS}/$SUB_DIR/"
+
+        val projection = arrayOf(
+            MediaStore.MediaColumns._ID,
+            MediaStore.MediaColumns.DISPLAY_NAME,
+            MediaStore.MediaColumns.SIZE,
+            MediaStore.MediaColumns.DATE_MODIFIED
+        )
+        val selection = "${MediaStore.MediaColumns.RELATIVE_PATH} = ?"
+        val result = mutableListOf<ReceivedFile>()
+        resolver.query(
+            collection, projection, selection, arrayOf(relativePath),
+            "${MediaStore.MediaColumns.DATE_MODIFIED} DESC"
+        )?.use { cursor ->
+            val idCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+            val nameCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+            val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+            val dateCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
+            while (cursor.moveToNext()) {
+                val id = cursor.getLong(idCol)
+                result += ReceivedFile(
+                    name = cursor.getString(nameCol) ?: "未命名",
+                    sizeBytes = cursor.getLong(sizeCol),
+                    dateModifiedMillis = cursor.getLong(dateCol) * 1000L,
+                    uri = ContentUris.withAppendedId(collection, id)
+                )
+            }
+        }
+        return result
+    }
+
+    private fun listLegacy(context: Context): List<ReceivedFile> {
+        val dir = legacyDir(context) ?: return emptyList()
+        val files = dir.listFiles()?.filter { it.isFile } ?: return emptyList()
+        return files.sortedByDescending { it.lastModified() }.map { f ->
+            ReceivedFile(
+                name = f.name,
+                sizeBytes = f.length(),
+                dateModifiedMillis = f.lastModified(),
+                uri = Uri.fromFile(f)
+            )
         }
     }
 

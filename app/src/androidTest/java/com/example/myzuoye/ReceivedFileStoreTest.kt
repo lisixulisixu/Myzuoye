@@ -74,6 +74,35 @@ class ReceivedFileStoreTest {
         assertNull("放弃后不应留下任何条目", findUri(target.fileName))
     }
 
+    @Test
+    fun 列表能列出已接收的文件且按时间倒序() {
+        val base = "wblist_${System.currentTimeMillis()}"
+        val first = ReceivedFileStore.create(context, "$base-a.txt")!!
+        first.write("A".toByteArray(StandardCharsets.UTF_8))
+        first.commit()
+        created += first.fileName
+
+        Thread.sleep(1100L) // MediaStore 的时间戳按秒，隔开两次写入
+
+        val second = ReceivedFileStore.create(context, "$base-b.txt")!!
+        second.write("B".toByteArray(StandardCharsets.UTF_8))
+        second.commit()
+        created += second.fileName
+
+        val list = ReceivedFileStore.list(context)
+        val names = list.map { it.name }
+        assertTrue("列表应包含 $base-a.txt", base + "-a.txt" in names)
+        assertTrue("列表应包含 $base-b.txt", base + "-b.txt" in names)
+
+        val idxA = names.indexOf("$base-a.txt")
+        val idxB = names.indexOf("$base-b.txt")
+        assertTrue("后写入的 B 应排在 A 前面（时间倒序）", idxB < idxA)
+
+        val entryA = list.first { it.name == "$base-a.txt" }
+        assertTrue("大小应正确", entryA.sizeBytes == 1L)
+        assertNotNull("应有可打开的 Uri", entryA.uri)
+    }
+
     private fun findUri(name: String): Uri? {
         val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND " +

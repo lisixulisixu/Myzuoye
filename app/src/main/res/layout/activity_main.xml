@@ -9,13 +9,23 @@
     android:orientation="vertical"
     tools:context=".MainActivity">
 
-    <ImageView
-        android:id="@+id/ivCover"
+    <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="168dp"
-        android:contentDescription="@string/photo1_name"
-        android:scaleType="centerCrop"
-        app:srcCompat="@drawable/p1" />
+        android:layout_height="168dp">
+
+        <ImageView
+            android:id="@+id/ivCover"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@string/photo1_name"
+            android:scaleType="centerCrop"
+            app:srcCompat="@drawable/p1" />
+
+        <!-- 封面装饰：柔和渐变 + 缓慢光斑，纯装饰不拦截触摸 -->
+        <com.example.myzuoye.ui.CoverOverlayView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+    </FrameLayout>
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -148,6 +158,17 @@
                 android:insetBottom="0dp"
                 android:minHeight="40dp"
                 android:text="@string/action_pick_file"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/btnViewFiles"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minHeight="40dp"
+                android:text="@string/action_view_files"
                 android:textSize="13sp" />
 
             <ProgressBar

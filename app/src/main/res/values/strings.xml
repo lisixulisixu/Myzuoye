@@ -58,4 +58,12 @@
     <string name="channel_debug_title">文本通道（调试）</string>
     <string name="channel_debug_connect">手动连接</string>
     <string name="channel_debug_host_hint">host:port，如 10.0.2.2:8988</string>
+
+    <!-- 应用内查看已接收文件 -->
+    <string name="action_view_files">已收文件</string>
+    <string name="files_title">已接收的文件</string>
+    <string name="files_count">共 %1$d 个</string>
+    <string name="files_empty">还没有接收到任何文件\n连接后收到的文件会出现在这里</string>
+    <string name="files_open">打开</string>
+    <string name="files_no_app">没有能打开此文件类型的应用</string>
 </resources>
