@@ -66,4 +66,19 @@
     <string name="files_empty">还没有接收到任何文件\n连接后收到的文件会出现在这里</string>
     <string name="files_open">打开</string>
     <string name="files_no_app">没有能打开此文件类型的应用</string>
+
+    <!-- 传输小游戏 -->
+    <string name="game_title">传输进行中，玩个小游戏吧</string>
+    <string name="game_view_desc">跳跃躲避障碍物的小游戏</string>
+    <string name="game_score">跳过 %1$d 个</string>
+    <string name="game_back">返回</string>
+    <string name="game_confirm">确定</string>
+    <string name="game_transfer_info">正在发送：%1$s（%2$d%%）</string>
+    <string name="game_transfer_done">已发送：%1$s</string>
+    <string name="game_transfer_fail">发送失败：%1$s</string>
+    <string name="game_transfer_idle">准备传输…</string>
+    <string name="game_over">游戏结束，跳过 %1$d 个障碍物</string>
+    <string name="game_tap_restart">点击画面重新开始</string>
+    <string name="game_back_confirm_title">退出小游戏</string>
+    <string name="game_back_confirm_msg">文件仍在后台传输，确定要退出小游戏吗？</string>
 </resources>

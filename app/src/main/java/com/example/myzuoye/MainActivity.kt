@@ -70,6 +70,9 @@ class MainActivity : AppCompatActivity() {
     private var pendingName: String = ""
     private var pendingSize: Long = 0
 
+    /** 传输期间弹出的小游戏窗口 */
+    private var transferGame: TransferGame? = null
+
     private val logLines = ArrayDeque<String>()
     private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
 
@@ -205,8 +208,14 @@ class MainActivity : AppCompatActivity() {
         TransferManager.onMessage = { line -> appendChat(line) }
         TransferManager.onReceiveProgress = { progress -> renderReceiveProgress(progress) }
         TransferManager.onReceiveDone = { path -> renderReceiveDone(path) }
-        TransferManager.onSendProgress = { progress -> renderSendProgress(progress) }
-        TransferManager.onSendDone = { ok -> renderSendDone(ok) }
+        TransferManager.onSendProgress = { progress ->
+            renderSendProgress(progress)
+            transferGame?.onProgress(pendingName, progress)
+        }
+        TransferManager.onSendDone = { ok ->
+            renderSendDone(ok)
+            transferGame?.onDone(pendingName, ok)
+        }
         renderChat()
         renderChannelState(TransferManager.state, "")
 
@@ -236,6 +245,9 @@ class MainActivity : AppCompatActivity() {
         TransferManager.onStateChanged = null
         TransferManager.onMessage = null
         TransferManager.clearFileCallbacks()
+        // 界面不可见时关闭游戏窗口，避免 Dialog 引用已销毁的 Activity
+        transferGame?.dismiss()
+        transferGame = null
     }
 
     override fun onDestroy() {
@@ -704,7 +716,20 @@ class MainActivity : AppCompatActivity() {
         )
         if (!ok) {
             toast(getString(R.string.transfer_busy))
+            return
         }
+
+        // 开始传输即弹出小游戏窗口（单文件时也弹，作为传输消遣）
+        showTransferGame(pendingName)
+    }
+
+    /** 弹出传输小游戏窗口，并把后续进度/完成回调桥接给它 */
+    private fun showTransferGame(fileName: String) {
+        val game = TransferGame(this)
+        transferGame = game
+        game.show()
+        // 立即显示初始状态
+        game.onProgress(fileName, 0f)
     }
 
     private fun renderReceiveProgress(progress: Float) {
