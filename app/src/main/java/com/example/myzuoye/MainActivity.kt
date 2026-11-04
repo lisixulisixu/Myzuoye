@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pInfo
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -78,6 +79,9 @@ class MainActivity : AppCompatActivity() {
     /** 权限请求正在进行中（系统弹窗还开着），此时不再重复发起 */
     private var permissionRequestInFlight = false
 
+    /** 「定位未打开」提示只弹一次 */
+    private var locationWarned = false
+
     /** 防止 onStart 与广播回调叠加触发重复搜索 */
     private var lastDiscoverAt = 0L
 
@@ -124,13 +128,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val permissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             permissionRequestInFlight = false
-            if (granted) {
-                log("已获得“附近设备”权限")
+            // 以“必需权限是否真的拿到”为准，通知权限被拒不影响连接
+            if (hasNearbyPermission()) {
+                log("已获得设备搜索权限")
                 startDiscovery()
             } else {
-                log("“附近设备”权限被拒绝")
+                log("设备搜索权限被拒绝")
                 tvP2pState.setText(R.string.p2p_state_no_permission)
                 if (!shouldShowRationale()) {
                     showPermissionSettingsDialog()
@@ -212,7 +217,7 @@ class MainActivity : AppCompatActivity() {
             !permissionAsked -> {
                 permissionAsked = true
                 permissionRequestInFlight = true
-                permissionLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
+                permissionLauncher.launch(permissionsToRequest())
             }
             else -> tvP2pState.setText(R.string.p2p_state_no_permission)
         }
@@ -357,14 +362,44 @@ class MainActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------------ 权限
 
-    private fun hasNearbyPermission(): Boolean =
-        ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.NEARBY_WIFI_DEVICES
-        ) == PackageManager.PERMISSION_GRANTED
+    /**
+     * Wi-Fi Direct 在实机上必需的运行时权限，按系统版本分裂：
+     * - Android 13（API 33）起：NEARBY_WIFI_DEVICES（neverForLocation，不需要定位）
+     * - Android 12 及以下：仍然是 ACCESS_FINE_LOCATION，且系统定位开关必须打开
+     *
+     * 早前只判断 NEARBY_WIFI_DEVICES，在 Android 7~12 上该权限并不存在，
+     * checkSelfPermission 恒返回拒绝，导致老系统手机直接卡在“无权限”、搜不到设备。
+     */
+    private fun requiredPermissions(): Array<String> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
 
-    private fun shouldShowRationale(): Boolean =
-        shouldShowRequestPermissionRationale(Manifest.permission.NEARBY_WIFI_DEVICES)
+    private fun hasNearbyPermission(): Boolean = requiredPermissions().all {
+        ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
+     * 实际一次性申请的权限：必需权限 + （Android 13 起）通知权限。
+     * 通知只影响前台服务提示能否显示，被拒绝也不阻断连接。
+     */
+    private fun permissionsToRequest(): Array<String> {
+        val required = requiredPermissions().toMutableList()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            required += Manifest.permission.POST_NOTIFICATIONS
+        }
+        return required.toTypedArray()
+    }
+
+    /** 权限是否被判为“不再询问”——是的话就只给个去设置的入口，别再弹窗了 */
+    private fun shouldShowRationale(): Boolean = requiredPermissions().any {
+        shouldShowRequestPermissionRationale(it)
+    }
 
     private fun requestPermissionIfNeeded(): Boolean {
         if (hasNearbyPermission()) return true
@@ -372,7 +407,7 @@ class MainActivity : AppCompatActivity() {
         if (!permissionAsked || shouldShowRationale()) {
             permissionAsked = true
             permissionRequestInFlight = true
-            permissionLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
+            permissionLauncher.launch(permissionsToRequest())
         } else {
             showPermissionSettingsDialog()
         }
@@ -398,8 +433,25 @@ class MainActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------------ 动作
 
+    /**
+     * Android 12 及以下，Wi-Fi Direct 扫描需要系统定位开关也是打开的，
+     * 只给权限还不够。这里只提示一次，避免每次续搜都弹。
+     */
+    private fun warnIfLocationDisabled() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return
+        if (locationWarned) return
+        val lm = getSystemService(LOCATION_SERVICE) as? android.location.LocationManager ?: return
+        val enabled = runCatching { lm.isLocationEnabled }.getOrDefault(true)
+        if (!enabled) {
+            locationWarned = true
+            log("系统定位未开启：Android 12 及以下搜不到设备，请打开定位开关")
+            Toast.makeText(this, "请打开系统“定位”开关，否则搜不到设备", Toast.LENGTH_LONG).show()
+        }
+    }
+
     private fun startDiscovery(force: Boolean = false) {
         if (!requestPermissionIfNeeded()) return
+        warnIfLocationDisabled()
 
         val now = SystemClock.elapsedRealtime()
         if (now - lastDiscoverAt < DISCOVER_DEBOUNCE_MS) {
