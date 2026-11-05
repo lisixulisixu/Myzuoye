@@ -84,6 +84,14 @@
     <string name="game_back_confirm_title">退出小游戏</string>
     <string name="game_back_confirm_msg">文件仍在后台传输，确定要退出小游戏吗？</string>
 
+    <!-- 传输前询问是否玩游戏 -->
+    <string name="game_ask_title">要玩小游戏吗？</string>
+    <string name="game_ask_message">传输时等得无聊的话，可以边玩边等。\n选择「不玩」后，以后传输就不再弹游戏窗口了（随时可点「玩游戏」自己玩，长按它可恢复这个提示）。</string>
+    <string name="game_ask_play">要玩</string>
+    <string name="game_ask_skip">不玩</string>
+    <string name="game_ask_skipped_toast">好的，以后传输不再弹游戏。长按「玩游戏」可恢复提示</string>
+    <string name="game_ask_restored_toast">已恢复：下次传输前会再问你要不要玩</string>
+
     <!-- Q 版人物形象 -->
     <string name="mascot_desc">Q版猫耳女仆形象，点击互动</string>
 </resources>

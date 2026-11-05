@@ -78,6 +78,15 @@ class MainActivity : AppCompatActivity() {
     /** 传输期间弹出的小游戏窗口 */
     private var transferGame: TransferGame? = null
 
+    /**
+     * 用户是否已经选择「传输时不玩小游戏」。
+     *
+     * 存在 SharedPreferences 里持久化：用户选过一次「不玩」之后，后续传输
+     * 不再弹游戏窗口、也不再询问，避免每次传文件都被打扰。
+     * 想恢复的话长按「玩游戏」按钮即可。
+     */
+    private var gamePromptDisabled = false
+
     private val logLines = ArrayDeque<String>()
     private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
 
@@ -163,6 +172,8 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         permissionAsked = savedInstanceState?.getBoolean(KEY_PERMISSION_ASKED) ?: false
+        // 读取「传输时不玩小游戏」偏好
+        gamePromptDisabled = prefs().getBoolean(KEY_GAME_PROMPT_DISABLED, false)
 
         bindViews()
         applyWindowInsets()
@@ -191,6 +202,11 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, ReceivedFilesActivity::class.java))
         }
         btnPlayGame.setOnClickListener { openGameForFun() }
+        // 长按「玩游戏」：恢复「传输时询问要不要玩」的提示
+        btnPlayGame.setOnLongClickListener {
+            restoreGamePrompt()
+            true
+        }
 
         // 调试入口：长按通道状态可手动起监听 / 连接，不依赖 P2P（模拟器可测）
         tvChannelState.setOnLongClickListener {
@@ -730,11 +746,55 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // 开始传输即弹出小游戏窗口（单文件时也弹，作为传输消遣）
-        showTransferGame(pendingName)
         // Q 版人物：传输开始提醒
         mascot.showTransferring()
+
+        // 传输已经开始跑，这里只决定要不要弹游戏窗口。
+        // 先问一句「要玩吗」，用户选不玩就不再打扰；已经选过不玩的直接跳过。
+        if (gamePromptDisabled) return
+        askToPlayGame(pendingName)
     }
+
+    /**
+     * 传输开始后询问用户要不要玩小游戏。
+     *
+     * 选「要玩」→ 弹游戏窗口；选「不玩」→ 记住偏好，以后传输不再弹也不再问
+     * （主界面的「玩游戏」按钮随时可以自己玩；长按它可恢复这个询问）。
+     */
+    private fun askToPlayGame(fileName: String) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.game_ask_title)
+            .setMessage(R.string.game_ask_message)
+            .setPositiveButton(R.string.game_ask_play) { _, _ ->
+                if (isFinishing || isDestroyed) return@setPositiveButton
+                if (TransferManager.isSending) {
+                    // 传输还在进行：正常弹游戏，顶部显示实时进度
+                    showTransferGame(fileName)
+                } else {
+                    // 传输已经结束（小文件很快）：直接按“已完成”状态打开，避免显示 0%
+                    showFinishedGame(fileName)
+                }
+            }
+            .setNegativeButton(R.string.game_ask_skip) { _, _ ->
+                gamePromptDisabled = true
+                prefs().edit().putBoolean(KEY_GAME_PROMPT_DISABLED, true).apply()
+                toast(getString(R.string.game_ask_skipped_toast))
+            }
+            .setCancelable(true)
+            .show()
+    }
+
+    private fun restoreGamePrompt() {
+        if (!gamePromptDisabled) {
+            toast(getString(R.string.game_ask_restored_toast))
+            return
+        }
+        gamePromptDisabled = false
+        prefs().edit().putBoolean(KEY_GAME_PROMPT_DISABLED, false).apply()
+        toast(getString(R.string.game_ask_restored_toast))
+    }
+
+    private fun prefs() = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
 
     /** 弹出传输小游戏窗口，并把后续进度/完成回调桥接给它 */
     private fun showTransferGame(fileName: String) {
@@ -743,6 +803,16 @@ class MainActivity : AppCompatActivity() {
         game.show()
         // 立即显示初始状态
         game.onProgress(fileName, 0f)
+    }
+
+    /** 传输已经结束时打开游戏窗口：直接呈现「已发送」状态，不会卡在 0% */
+    private fun showFinishedGame(fileName: String) {
+        if (transferGame?.isShowing() == true) return
+        val game = TransferGame(this)
+        transferGame = game
+        game.show()
+        game.onProgress(fileName, 1f)
+        game.onDone(fileName, true)
     }
 
     /** 平时娱乐入口：无传输信息，只玩游戏 */
@@ -805,6 +875,10 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val KEY_PERMISSION_ASKED = "permission_asked"
+
+        /** SharedPreferences 文件名与「传输时不玩小游戏」偏好的 key */
+        const val PREFS_NAME = "myzuoye_prefs"
+        const val KEY_GAME_PROMPT_DISABLED = "game_prompt_disabled"
 
         /** 手动点“搜索设备”的最小间隔，压得太短会频繁触发系统 BUSY */
         const val DISCOVER_DEBOUNCE_MS = 600L
