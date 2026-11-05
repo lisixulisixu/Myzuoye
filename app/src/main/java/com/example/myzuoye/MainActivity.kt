@@ -32,6 +32,8 @@ import com.example.myzuoye.p2p.P2pController
 import com.example.myzuoye.transfer.TransferManager
 import com.example.myzuoye.ui.DeviceAdapter
 import com.example.myzuoye.ui.MascotView
+import com.example.myzuoye.widget.TransferWidgetProvider
+import com.example.myzuoye.widget.WidgetState
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
@@ -228,18 +230,31 @@ class MainActivity : AppCompatActivity() {
         // 通道回调只在界面可见时挂载，避免 Activity 泄漏
         TransferManager.onStateChanged = { state, message -> renderChannelState(state, message) }
         TransferManager.onMessage = { line -> appendChat(line) }
-        TransferManager.onReceiveProgress = { progress -> renderReceiveProgress(progress) }
-        TransferManager.onReceiveDone = { path -> renderReceiveDone(path) }
+        TransferManager.onReceiveProgress = { progress ->
+            renderReceiveProgress(progress)
+            // 小组件：接收中显示文件名（同一文件的高频进度回调会被去重，不会反复刷）
+            WidgetState.setTransferring(this, true, TransferManager.receivingFileName)
+        }
+        TransferManager.onReceiveDone = { path ->
+            renderReceiveDone(path)
+            WidgetState.setTransferring(this, false)
+            if (path != null) WidgetState.addReceivedFile(this)
+        }
         TransferManager.onSendProgress = { progress ->
             renderSendProgress(progress)
             transferGame?.onProgress(pendingName, progress)
+            WidgetState.setTransferring(this, true, pendingName)
         }
         TransferManager.onSendDone = { ok ->
             renderSendDone(ok)
             transferGame?.onDone(pendingName, ok)
+            WidgetState.setTransferring(this, false)
             // Q 版人物：传输结束提醒
             if (ok) mascot.showDone() else mascot.showFail()
         }
+
+        // 进入界面时对齐一次小组件状态（应用被杀后桌面上的卡片可能是旧的）
+        TransferWidgetProvider.refresh(this)
         renderChat()
         renderChannelState(TransferManager.state, "")
 
@@ -665,6 +680,9 @@ class MainActivity : AppCompatActivity() {
             }
         )
         btnSend.isEnabled = state == TransferManager.State.CONNECTED
+
+        // 桌面小组件：同步连接状态（内部做了「状态没变不刷新」的判断）
+        WidgetState.setConnected(this, state == TransferManager.State.CONNECTED)
     }
 
     private fun renderChat() {

@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  桌面小组件布局。
+  注意：RemoteViews 只支持有限的 View 与属性，这里只用 LinearLayout / Space / ImageView / TextView，
+  所有样式都写在布局里（文本、状态色由 Provider 运行时通过 RemoteViews 设置）。
+
+  垂直方向用 Space + weight 做弹性分布：标题固定在顶部，文件数与提示贴底。
+  这样用户把卡片拉高（4x3、4x4）时，留白会落在中间，不会出现内容全挤在顶部的情况。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widgetRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg"
+    android:orientation="vertical"
+    android:padding="14dp">
+
+    <!-- 第一行：图标 + 名称 + 连接状态 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <ImageView
+            android:id="@+id/widgetIcon"
+            android:layout_width="26dp"
+            android:layout_height="26dp"
+            android:contentDescription="@string/widget_title"
+            android:src="@mipmap/ic_launcher_round_my" />
+
+        <TextView
+            android:id="@+id/widgetTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="@string/widget_title"
+            android:textColor="#22303F"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <ImageView
+            android:id="@+id/widgetDot"
+            android:layout_width="10dp"
+            android:layout_height="10dp"
+            android:contentDescription="@string/widget_status_label"
+            android:src="@drawable/widget_dot" />
+
+        <TextView
+            android:id="@+id/widgetStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="5dp"
+            android:maxLines="1"
+            android:text="@string/widget_status_disconnected"
+            android:textColor="#7A8698"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <!-- 弹性留白：卡片被拉高时多余空间落在中间。
+         这里用空 TextView 而不是 Space —— RemoteViews 的 View 白名单里没有 Space，
+         用它会导致整个卡片加载失败（桌面显示 Can't load widget）。 -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <!-- 已接收文件数（传输中会换成文件名） -->
+    <TextView
+        android:id="@+id/widgetReceived"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="@string/widget_received_zero"
+        android:textColor="#3C4A5C"
+        android:textSize="13sp" />
+
+    <!-- 进入应用的提示 -->
+    <TextView
+        android:id="@+id/widgetHint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="@string/widget_hint"
+        android:textColor="#8A93A5"
+        android:textSize="11sp" />
+</LinearLayout>

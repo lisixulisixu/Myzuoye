@@ -50,6 +50,20 @@
             android:name=".service.TransferService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- 桌面小组件：显示连接状态与已接收文件数，点按进入应用 -->
+        <receiver
+            android:name=".widget.TransferWidgetProvider"
+            android:exported="false"
+            android:label="@string/widget_title">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_transfer_info" />
+        </receiver>
     </application>
 
 </manifest>

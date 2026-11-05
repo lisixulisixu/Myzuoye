@@ -17,6 +17,7 @@ Android Wi-Fi Direct（P2P）点对点文件传输。
 - **文件传输**：选择文件发送，接收方自动落盘到「下载/WiFi直传」，MD5 校验完整性
 - **查看已收文件**：主界面「已收文件」按钮进入列表页，点击用系统应用打开
 - **传输小游戏**：发送前询问是否要玩，玩则弹出跑酷小游戏；也可点「玩游戏」随时玩（见下文）
+- **桌面小组件**：显示连接状态与已接收文件数，点按直达应用（见下文）
 
 ## 环境
 
@@ -42,6 +43,10 @@ Android Wi-Fi Direct（P2P）点对点文件传输。
 | `app/src/main/java/com/example/myzuoye/ui/PixelRunnerView.kt` | 像素跑酷游戏视图（Choreographer 帧同步） |
 | `app/src/main/java/com/example/myzuoye/ui/CoverOverlayView.kt` | 封面装饰层（渐变 + 光斑） |
 | `app/src/main/java/com/example/myzuoye/ui/ReceivedFileAdapter.kt` | 已收文件列表适配器 |
+| `app/src/main/java/com/example/myzuoye/widget/TransferWidgetProvider.kt` | 桌面小组件：渲染状态、点击进入应用 |
+| `app/src/main/java/com/example/myzuoye/widget/WidgetState.kt` | 小组件状态快照（SharedPreferences），供跨进程读取 |
+| `app/src/main/res/layout/widget_transfer.xml` | 小组件布局（RemoteViews 白名单内的 View） |
+| `app/src/main/res/xml/widget_transfer_info.xml` | 小组件配置：4×2、可缩放、预览布局 |
 
 ## 文本通道（M2）
 
@@ -133,4 +138,18 @@ adb -s emulator-5554 shell md5sum "/sdcard/Download/WiFi直传/xxx.jpg"
 - **中断**：点「返回」或按返回键只退出游戏，后台传输不受影响
 - **完成**：传输完成后①区显示「已发送」，可继续玩或点「确定」关闭
 - 平时（非传输）点「玩游戏」进入休闲模式，不显示进度条，纯娱乐
+
+## 桌面小组件
+
+长按桌面空白处 →「Widgets」→ 找到「Myzuoye / WiFi 快传」→ 拖到桌面即可添加，默认 4×2，可横向/纵向缩放。
+
+- **显示内容**：应用图标与名称、连接状态（绿点=已连接 / 灰点=未连接 / 蓝点=传输中）、
+  已接收文件数；传输过程中第二行会换成「正在接收：文件名」
+- **点按直达**：点卡片任意位置直接打开应用
+- **实时刷新**：应用内连接状态变化、开始/结束传输、收到文件时主动推送更新
+  （`updatePeriodMillis` 的 30 分钟系统轮询只是兜底）
+- **状态来源**：小组件跑在桌面进程，读不到应用内存态，因此由应用侧把状态写进
+  `SharedPreferences`（`WidgetState`），小组件渲染时再读出来
+- 布局只用 RemoteViews 白名单内的 View。**不要用 `Space`**——它不在白名单里，
+  会导致整张卡片显示「Can't load widget」；弹性留白用空 `TextView` + `layout_weight` 实现
 

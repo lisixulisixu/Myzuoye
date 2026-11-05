@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  桌面小组件配置。
+  - 默认 4x2 格，可横向/纵向缩放；
+  - updatePeriodMillis 最小 30 分钟，实时刷新主要靠应用内状态变化主动推送；
+  - previewLayout 让桌面选择器直接展示真实样式（Android 12+，低版本忽略）。
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/widget_description"
+    android:initialLayout="@layout/widget_transfer"
+    android:minHeight="70dp"
+    android:minWidth="180dp"
+    android:previewLayout="@layout/widget_transfer"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellHeight="2"
+    android:targetCellWidth="4"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />
