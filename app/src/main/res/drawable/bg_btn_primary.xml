@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="#332E7BD6">
+    <item>
+        <selector>
+            <!-- 按压状态：颜色加深，模拟下沉 -->
+            <item android:state_pressed="true">
+                <shape android:shape="rectangle">
+                    <solid android:color="@color/primary_dark" />
+                    <corners android:radius="10dp" />
+                </shape>
+            </item>
+            <!-- 悬停状态（鼠标移到上面）：颜色变亮，与其他按钮区分 -->
+            <item android:state_hovered="true">
+                <shape android:shape="rectangle">
+                    <solid android:color="@color/primary_light" />
+                    <corners android:radius="10dp" />
+                    <stroke android:width="2dp" android:color="#FFFFFFFF" />
+                </shape>
+            </item>
+            <!-- 默认状态 -->
+            <item>
+                <shape android:shape="rectangle">
+                    <solid android:color="@color/primary" />
+                    <corners android:radius="10dp" />
+                </shape>
+            </item>
+        </selector>
+    </item>
+</ripple>

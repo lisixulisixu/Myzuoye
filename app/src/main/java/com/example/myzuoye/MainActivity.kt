@@ -31,6 +31,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.example.myzuoye.p2p.P2pController
 import com.example.myzuoye.transfer.TransferManager
 import com.example.myzuoye.ui.DeviceAdapter
+import com.example.myzuoye.ui.MascotView
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
@@ -65,6 +66,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnViewFiles: Button
     private lateinit var pbTransfer: ProgressBar
     private lateinit var tvTransferState: TextView
+
+    /** Q 版人物形象 */
+    private lateinit var mascot: MascotView
 
     /** 待发送的文件信息：uri + 显示名 + 大小。选完文件后由 pickFileLauncher 填充 */
     private var pendingUri: Uri? = null
@@ -217,6 +221,8 @@ class MainActivity : AppCompatActivity() {
         TransferManager.onSendDone = { ok ->
             renderSendDone(ok)
             transferGame?.onDone(pendingName, ok)
+            // Q 版人物：传输结束提醒
+            if (ok) mascot.showDone() else mascot.showFail()
         }
         renderChat()
         renderChannelState(TransferManager.state, "")
@@ -288,6 +294,8 @@ class MainActivity : AppCompatActivity() {
         btnViewFiles = findViewById(R.id.btnViewFiles)
         pbTransfer = findViewById(R.id.pbTransfer)
         tvTransferState = findViewById(R.id.tvTransferState)
+
+        mascot = findViewById(R.id.mascot)
     }
 
     private fun applyWindowInsets() {
@@ -724,6 +732,8 @@ class MainActivity : AppCompatActivity() {
 
         // 开始传输即弹出小游戏窗口（单文件时也弹，作为传输消遣）
         showTransferGame(pendingName)
+        // Q 版人物：传输开始提醒
+        mascot.showTransferring()
     }
 
     /** 弹出传输小游戏窗口，并把后续进度/完成回调桥接给它 */

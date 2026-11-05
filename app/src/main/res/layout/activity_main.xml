@@ -1,267 +1,302 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="?android:attr/colorBackground"
-    android:orientation="vertical"
+    android:background="@color/bg_grad_top"
     tools:context=".MainActivity">
 
-    <FrameLayout
+    <!-- 流动背景：渐变打底 + 漂移柔光，纯装饰不拦截触摸 -->
+    <com.example.myzuoye.ui.FlowBackgroundView
         android:layout_width="match_parent"
-        android:layout_height="168dp">
-
-        <ImageView
-            android:id="@+id/ivCover"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:contentDescription="@string/photo1_name"
-            android:scaleType="centerCrop"
-            app:srcCompat="@drawable/p1" />
-
-        <!-- 封面装饰：柔和渐变 + 缓慢光斑，纯装饰不拦截触摸 -->
-        <com.example.myzuoye.ui.CoverOverlayView
-            android:layout_width="match_parent"
-            android:layout_height="match_parent" />
-    </FrameLayout>
+        android:layout_height="match_parent" />
 
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:paddingHorizontal="16dp"
-        android:paddingTop="12dp">
+        android:layout_height="match_parent"
+        android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/tvP2pState"
+        <FrameLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/p2p_state_init"
-            android:textSize="16sp"
-            android:textStyle="bold" />
+            android:layout_height="168dp">
 
-        <TextView
-            android:id="@+id/tvSelfInfo"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="5dp"
-            android:text="@string/self_unknown"
-            android:textSize="12sp" />
+            <ImageView
+                android:id="@+id/ivCover"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@string/photo1_name"
+                android:scaleType="centerCrop"
+                app:srcCompat="@drawable/p1" />
 
-        <TextView
-            android:id="@+id/tvRoleInfo"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:text="@string/role_unknown"
-            android:textSize="12sp" />
-    </LinearLayout>
+            <!-- 封面装饰：柔和渐变 + 缓慢光斑，纯装饰不拦截触摸 -->
+            <com.example.myzuoye.ui.CoverOverlayView
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:paddingHorizontal="12dp"
-        android:paddingTop="8dp">
-
-        <Button
-            android:id="@+id/btnDiscover"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginHorizontal="4dp"
-            android:layout_weight="1"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:minHeight="40dp"
-            android:paddingHorizontal="4dp"
-            android:text="@string/action_discover"
-            android:textSize="13sp" />
-
-        <Button
-            android:id="@+id/btnCreateGroup"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginHorizontal="4dp"
-            android:layout_weight="1"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:minHeight="40dp"
-            android:paddingHorizontal="4dp"
-            android:text="@string/action_create_group"
-            android:textSize="13sp" />
-
-        <Button
-            android:id="@+id/btnDisconnect"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginHorizontal="4dp"
-            android:layout_weight="1"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:minHeight="40dp"
-            android:paddingHorizontal="4dp"
-            android:text="@string/action_disconnect"
-            android:textSize="13sp" />
-
-        <Button
-            android:id="@+id/btnPlayGame"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginHorizontal="4dp"
-            android:layout_weight="1"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:minHeight="40dp"
-            android:paddingHorizontal="4dp"
-            android:text="@string/game_play"
-            android:textSize="13sp" />
-    </LinearLayout>
-
-    <TextView
-        android:id="@+id/tvPeerHint"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:paddingHorizontal="16dp"
-        android:paddingTop="10dp"
-        android:paddingBottom="2dp"
-        android:text="@string/nearby_devices_zero"
-        android:textSize="12sp" />
-
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/rvDevices"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_marginHorizontal="8dp"
-        android:layout_weight="1"
-        android:clipToPadding="false"
-        android:minHeight="72dp"
-        android:scrollbars="vertical" />
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginHorizontal="12dp"
-        android:layout_marginTop="4dp"
-        android:background="@drawable/bg_panel"
-        android:orientation="vertical"
-        android:padding="12dp">
-
-        <TextView
-            android:id="@+id/tvChannelState"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/channel_idle"
-            android:textSize="13sp"
-            android:textStyle="bold" />
+            <!-- Q 版人物形象：封面右下角装饰，不遮挡下方交互 -->
+            <com.example.myzuoye.ui.MascotView
+                android:id="@+id/mascot"
+                android:layout_width="72dp"
+                android:layout_height="96dp"
+                android:layout_gravity="end|bottom"
+                android:layout_marginEnd="8dp"
+                android:layout_marginBottom="4dp"
+                android:contentDescription="@string/mascot_desc" />
+        </FrameLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <Button
-                android:id="@+id/btnPickFile"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:minHeight="40dp"
-                android:text="@string/action_pick_file"
-                android:textSize="13sp" />
-
-            <Button
-                android:id="@+id/btnViewFiles"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:minHeight="40dp"
-                android:text="@string/action_view_files"
-                android:textSize="13sp" />
-
-            <ProgressBar
-                android:id="@+id/pbTransfer"
-                style="?android:attr/progressBarStyleHorizontal"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="10dp"
-                android:layout_weight="1"
-                android:max="100"
-                android:progress="0" />
-        </LinearLayout>
-
-        <TextView
-            android:id="@+id/tvTransferState"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:text="@string/transfer_idle"
-            android:textSize="11sp" />
-
-        <ScrollView
-            android:id="@+id/svChat"
-            android:layout_width="match_parent"
-            android:layout_height="84dp"
-            android:layout_marginTop="6dp">
+            android:orientation="vertical"
+            android:paddingHorizontal="16dp"
+            android:paddingTop="12dp">
 
             <TextView
-                android:id="@+id/tvChat"
+                android:id="@+id/tvP2pState"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:lineSpacingExtra="2dp"
-                android:text="@string/chat_empty"
+                android:text="@string/p2p_state_init"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvSelfInfo"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="5dp"
+                android:text="@string/self_unknown"
                 android:textSize="12sp" />
-        </ScrollView>
+
+            <TextView
+                android:id="@+id/tvRoleInfo"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="@string/role_unknown"
+                android:textSize="12sp" />
+        </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <EditText
-                android:id="@+id/etMessage"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:hint="@string/hint_message"
-                android:importantForAutofill="no"
-                android:inputType="text"
-                android:maxLines="1"
-                android:minHeight="40dp"
-                android:textSize="13sp" />
+            android:orientation="horizontal"
+            android:paddingHorizontal="12dp"
+            android:paddingTop="8dp">
 
             <Button
-                android:id="@+id/btnSend"
-                android:layout_width="wrap_content"
+                android:id="@+id/btnDiscover"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
+                android:layout_marginHorizontal="4dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_btn_primary"
                 android:insetTop="0dp"
                 android:insetBottom="0dp"
                 android:minHeight="40dp"
-                android:minWidth="64dp"
-                android:text="@string/action_send"
+                android:paddingHorizontal="4dp"
+                android:text="@string/action_discover"
+                android:textColor="@color/white"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/btnCreateGroup"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="4dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_btn_primary"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minHeight="40dp"
+                android:paddingHorizontal="4dp"
+                android:text="@string/action_create_group"
+                android:textColor="@color/white"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/btnDisconnect"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="4dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_btn_primary"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minHeight="40dp"
+                android:paddingHorizontal="4dp"
+                android:text="@string/action_disconnect"
+                android:textColor="@color/white"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/btnPlayGame"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="4dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_btn_secondary"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minHeight="40dp"
+                android:paddingHorizontal="4dp"
+                android:text="@string/game_play"
+                android:textColor="@color/primary_dark"
                 android:textSize="13sp" />
         </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvPeerHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingHorizontal="16dp"
+            android:paddingTop="10dp"
+            android:paddingBottom="2dp"
+            android:text="@string/nearby_devices_zero"
+            android:textSize="12sp" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/rvDevices"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginHorizontal="8dp"
+            android:layout_weight="1"
+            android:clipToPadding="false"
+            android:minHeight="72dp"
+            android:scrollbars="vertical" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginHorizontal="12dp"
+            android:layout_marginTop="4dp"
+            android:background="@drawable/bg_panel"
+            android:orientation="vertical"
+            android:padding="12dp">
+
+            <TextView
+                android:id="@+id/tvChannelState"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/channel_idle"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnPickFile"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_btn_primary"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minHeight="40dp"
+                    android:text="@string/action_pick_file"
+                    android:textColor="@color/white"
+                    android:textSize="13sp" />
+
+                <Button
+                    android:id="@+id/btnViewFiles"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minHeight="40dp"
+                    android:text="@string/action_view_files"
+                    android:textColor="@color/primary_dark"
+                    android:textSize="13sp" />
+
+                <ProgressBar
+                    android:id="@+id/pbTransfer"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:layout_weight="1"
+                    android:max="100"
+                    android:progress="0" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvTransferState"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="@string/transfer_idle"
+                android:textSize="11sp" />
+
+            <ScrollView
+                android:id="@+id/svChat"
+                android:layout_width="match_parent"
+                android:layout_height="84dp"
+                android:layout_marginTop="6dp">
+
+                <TextView
+                    android:id="@+id/tvChat"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:lineSpacingExtra="2dp"
+                    android:text="@string/chat_empty"
+                    android:textSize="12sp" />
+            </ScrollView>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <EditText
+                    android:id="@+id/etMessage"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:hint="@string/hint_message"
+                    android:importantForAutofill="no"
+                    android:inputType="text"
+                    android:maxLines="1"
+                    android:minHeight="40dp"
+                    android:textSize="13sp" />
+
+                <Button
+                    android:id="@+id/btnSend"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/bg_btn_primary"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minHeight="40dp"
+                    android:minWidth="64dp"
+                    android:text="@string/action_send"
+                    android:textColor="@color/white"
+                    android:textSize="13sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvLog"
+            android:layout_width="match_parent"
+            android:layout_height="76dp"
+            android:layout_marginHorizontal="12dp"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="10dp"
+            android:background="@drawable/bg_log"
+            android:fontFamily="monospace"
+            android:gravity="bottom"
+            android:padding="8dp"
+            android:textSize="11sp" />
+
     </LinearLayout>
 
-    <TextView
-        android:id="@+id/tvLog"
-        android:layout_width="match_parent"
-        android:layout_height="76dp"
-        android:layout_marginHorizontal="12dp"
-        android:layout_marginTop="8dp"
-        android:layout_marginBottom="10dp"
-        android:background="@drawable/bg_log"
-        android:fontFamily="monospace"
-        android:gravity="bottom"
-        android:padding="8dp"
-        android:textSize="11sp" />
-
-</LinearLayout>
+</FrameLayout>

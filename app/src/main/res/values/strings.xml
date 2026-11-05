@@ -83,4 +83,7 @@
     <string name="game_tap_restart">点击画面重新开始</string>
     <string name="game_back_confirm_title">退出小游戏</string>
     <string name="game_back_confirm_msg">文件仍在后台传输，确定要退出小游戏吗？</string>
+
+    <!-- Q 版人物形象 -->
+    <string name="mascot_desc">Q版猫耳女仆形象，点击互动</string>
 </resources>

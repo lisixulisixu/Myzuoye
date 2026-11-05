@@ -2,4 +2,15 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!-- 主题色：清新的青蓝色，用于按钮和强调 -->
+    <color name="primary">#2E7BD6</color>
+    <color name="primary_dark">#1E5AA8</color>
+    <color name="primary_light">#5A9BE8</color>
+
+    <!-- 背景渐变端点 -->
+    <color name="bg_grad_top">#E8F0FB</color>
+    <color name="bg_grad_bottom">#F5F1E8</color>
+    <color name="bg_accent_1">#D6E7FB</color>
+    <color name="bg_accent_2">#FBE4D6</color>
 </resources>
