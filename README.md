@@ -8,7 +8,7 @@ Android Wi-Fi Direct（P2P）点对点文件传输。
 - M2 ✅ TCP 文本通道：组主监听 `8988`、客户端带重试连接，双向互发 UTF-8 文本
 - M3 ✅ 单向文件传输：选择文件 → 文件头（文件名/大小/MD5）→ 8KB 分片 → 落盘 + 进度 + MD5 校验
 - M4 ✅ 前台服务保活：传输期间通知栏进度，切后台/锁屏不中断
-- 附加 ✅ 应用内查看已接收文件、封面特效、传输期间的小游戏
+- 附加 ✅ 应用内查看已接收文件、封面特效、传输期间的小游戏、带天气特效的桌面小组件
 
 ## 功能速览
 
@@ -17,7 +17,8 @@ Android Wi-Fi Direct（P2P）点对点文件传输。
 - **文件传输**：选择文件发送，接收方自动落盘到「下载/WiFi直传」，MD5 校验完整性
 - **查看已收文件**：主界面「已收文件」按钮进入列表页，点击用系统应用打开
 - **传输小游戏**：发送前询问是否要玩，玩则弹出跑酷小游戏；也可点「玩游戏」随时玩（见下文）
-- **桌面小组件**：显示连接状态与已接收文件数，点按直达应用（见下文）
+- **桌面小组件**：按定位显示当地温度与天气，并按天气画太阳/月亮/云/雨雪/雷电特效；
+  同时显示连接状态与已接收文件数，点按直达应用（见下文）
 
 ## 环境
 
@@ -43,7 +44,10 @@ Android Wi-Fi Direct（P2P）点对点文件传输。
 | `app/src/main/java/com/example/myzuoye/ui/PixelRunnerView.kt` | 像素跑酷游戏视图（Choreographer 帧同步） |
 | `app/src/main/java/com/example/myzuoye/ui/CoverOverlayView.kt` | 封面装饰层（渐变 + 光斑） |
 | `app/src/main/java/com/example/myzuoye/ui/ReceivedFileAdapter.kt` | 已收文件列表适配器 |
-| `app/src/main/java/com/example/myzuoye/widget/TransferWidgetProvider.kt` | 桌面小组件：渲染状态、点击进入应用 |
+| `app/src/main/java/com/example/myzuoye/widget/TransferWidgetProvider.kt` | 桌面小组件：渲染天气/状态、点击进入应用 |
+| `app/src/main/java/com/example/myzuoye/widget/WeatherSceneRenderer.kt` | 离屏绘制小组件的天气背景与天体图层 |
+| `app/src/main/java/com/example/myzuoye/weather/WeatherRepository.kt` | 定位 → Open-Meteo 天气 → 城市反查 → 落盘 + 刷新小组件 |
+| `app/src/main/java/com/example/myzuoye/weather/WeatherCondition.kt` | WMO 天气代码 → 天气分类 / 中文短名 |
 | `app/src/main/java/com/example/myzuoye/widget/WidgetState.kt` | 小组件状态快照（SharedPreferences），供跨进程读取 |
 | `app/src/main/res/layout/widget_transfer.xml` | 小组件布局（RemoteViews 白名单内的 View） |
 | `app/src/main/res/xml/widget_transfer_info.xml` | 小组件配置：4×2、可缩放、预览布局 |
@@ -124,6 +128,16 @@ adb -s emulator-5554 shell md5sum "/sdcard/Download/WiFi直传/xxx.jpg"
 接收的文件保存在系统「下载/WiFi直传」目录，主界面点「已收文件」进入列表页，按时间倒序展示，
 点击任意文件用系统应用打开（图片进图库、文档进 WPS 等）。文件管理器、相册、微信也能直接看到该目录。
 
+## Q 版人物
+
+封面右下角的猫耳女仆（`ui/MascotView.kt`），点一下会弹跳、换表情，并在头顶的气泡里说一句话；
+开始传输 / 传输成功 / 传输失败也会自动换表情提示。
+
+- **气泡排版**：气泡画在人物上方的独立区域，按控件宽度自动折行。两行放不下就逐级缩小字号
+  （21dp → 13dp），仍然超长才截断加省略号——任何长度的提示语都不会被控件边缘裁掉
+- **人物让位**：气泡变高时人物区域等比缩小并保持贴底，两者不会叠在一起
+- 台词停留时长跟长度走（1.8s 起，最长 4.2s），长句子来不及看完就消失会显得很敷衍
+
 ## 传输小游戏
 
 发送文件时会先问一句「要玩小游戏吗？」，选「要玩」才弹出跑酷小游戏，边传边玩；
@@ -143,13 +157,62 @@ adb -s emulator-5554 shell md5sum "/sdcard/Download/WiFi直传/xxx.jpg"
 
 长按桌面空白处 →「Widgets」→ 找到「Myzuoye / WiFi 快传」→ 拖到桌面即可添加，默认 4×2，可横向/纵向缩放。
 
+### 天气与温度
+
+- **数据来源**：按设备定位（大致位置即可）请求 Open-Meteo 当前天气（温度、天气代码、昼夜），
+  再用 BigDataCloud 反查城市名。两者都免 API Key，失败时保留上一次结果，不会突然变成 `--°`
+- **刷新节奏**：系统每 30 分钟回调一次 `onUpdate` 时顺带刷新；应用每次进入前台也刷一次，
+  内部按 15 分钟节流，城市名 6 小时内不重复反查，省流量也省电
+- **权限**：Android 13+ 只需要「大致位置」（`ACCESS_COARSE_LOCATION`），首次进应用时询问一次；
+  拒绝不影响任何传输功能，卡片上会提示「需开启定位」。Android 12 及以下为了搜设备本来就要定位权限，直接复用
+- **显示**：第一行温度（如 `23°`），第二行天气短名（晴 / 多云 / 阴 / 雨 / 雷阵雨 / 雪…），
+  右下角「城市 · 更新时间」
+
+### 天气特效
+
+卡片背景不是纯色，而是按控件实际尺寸**离屏绘制成位图**再交给 ImageView：
+
+| 天气 | 画面 |
+| --- | --- |
+| 晴 | 暖色天空 + 太阳光晕 + 旋转光芒 + 星芒 |
+| 多云 / 阴 | 淡蓝或灰蓝天空 + 分层柔和云团（越靠上越大越淡） |
+| 雾 | 灰白天空 + 五道横向雾带 + 整体薄雾 |
+| 雨 / 毛毛雨 / 阵雨 | 冷色天空 + 低垂云 + 斜向雨丝 + 地面溅点 |
+| 雷阵雨 | 雨 + 云下闪电（外发光描边） |
+| 雪 | 冷白天空 + 大小不一的雪花（带冷色外晕） |
+| 夜间 | 深蓝渐变 + 月亮 / 星空，**文字自动切成浅色** |
+
+实现上有两个坑：
+
+- **不要让正圆被拉伸**：背景用 `fitXY` 铺满卡片，会被卡片比例拉成椭圆。
+  所以太阳/月亮单独画在**正方形位图**里、用固定 dp 的正方形 ImageView 承载，任何尺寸下都是正圆；
+  光晕半径也压在 `2.6r` 以内，否则渐变会在方形位图边缘被切断，桌面上会看到一个方框
+- **位图大小有上限**：RemoteViews 走 Binder 传输，渲染时按 480px 宽 / 22 万像素封顶，
+  超出的部分靠 `fitXY` 放大（渐变和云都是模糊的，放大看不出来）
+
+### 状态与交互
+
 - **显示内容**：应用图标与名称、连接状态（绿点=已连接 / 灰点=未连接 / 蓝点=传输中）、
-  已接收文件数；传输过程中第二行会换成「正在接收：文件名」
+  已接收文件数；传输过程中会换成「正在接收：文件名」
 - **点按直达**：点卡片任意位置直接打开应用
 - **实时刷新**：应用内连接状态变化、开始/结束传输、收到文件时主动推送更新
   （`updatePeriodMillis` 的 30 分钟系统轮询只是兜底）
 - **状态来源**：小组件跑在桌面进程，读不到应用内存态，因此由应用侧把状态写进
-  `SharedPreferences`（`WidgetState`），小组件渲染时再读出来
+  `SharedPreferences`（`WidgetState` / `WeatherRepository`），小组件渲染时再读出来
 - 布局只用 RemoteViews 白名单内的 View。**不要用 `Space`**——它不在白名单里，
   会导致整张卡片显示「Can't load widget」；弹性留白用空 `TextView` + `layout_weight` 实现
 
+## 验收用的对照图
+
+`androidTest` 里有两个「肉眼验收」测试，不参与断言，只把画面拼成一张图导出来看：
+
+```bash
+adb shell am instrument -w -e class com.example.myzuoye.WeatherScenePreviewTest \
+  com.example.myzuoye.test/androidx.test.runner.AndroidJUnitRunner
+adb shell am instrument -w -e class com.example.myzuoye.MascotBubblePreviewTest \
+  com.example.myzuoye.test/androidx.test.runner.AndroidJUnitRunner
+
+# 导出（写到应用私有目录，用 run-as 取）
+adb exec-out run-as com.example.myzuoye cat files/weather_preview/weather_sheet.png > weather_sheet.png
+adb exec-out run-as com.example.myzuoye cat files/mascot_preview/bubble_sheet.png > bubble_sheet.png
+```

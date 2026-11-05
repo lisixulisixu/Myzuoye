@@ -97,14 +97,29 @@
 
     <!-- 桌面小组件 -->
     <string name="widget_title">WiFi 快传</string>
-    <string name="widget_description">显示连接状态与已接收文件数，点按即可进入应用</string>
+    <string name="widget_description">显示所在地的天气与温度，以及连接状态和已接收文件数，点按即可进入应用</string>
     <string name="widget_status_label">连接状态</string>
     <string name="widget_status_connected">已连接</string>
     <string name="widget_status_disconnected">未连接</string>
     <string name="widget_status_sending">传输中</string>
     <string name="widget_status_receiving">接收中</string>
-    <string name="widget_received_zero">已接收 0 个文件</string>
-    <string name="widget_received">已接收 %1$d 个文件</string>
+    <string name="widget_received_zero">已接收 0 个</string>
+    <string name="widget_received">已接收 %1$d 个</string>
     <string name="widget_receiving">正在接收：%1$s</string>
-    <string name="widget_hint">点按打开应用</string>
+
+    <!-- 小组件天气 -->
+    <string name="widget_temp">%1$d°</string>
+    <string name="widget_temp_unknown">--°</string>
+    <string name="widget_weather_loading">天气更新中</string>
+    <string name="widget_weather_locating">定位中…</string>
+    <string name="widget_weather_no_permission">未获取天气</string>
+    <string name="widget_weather_need_permission_short">需开启定位</string>
+    <string name="widget_weather_here">当前位置</string>
+    <string name="widget_weather_city_time">%1$s · %2$s</string>
+
+    <!-- 天气定位权限说明 -->
+    <string name="weather_loc_title">用定位在桌面显示天气</string>
+    <string name="weather_loc_message">桌面小组件会根据你的大致位置显示当前温度和天气，并配上对应的天气特效。\n\n只需要「大致位置」，不会记录或上传你的精确轨迹；不允许也不影响传文件功能，只是小组件不显示天气。</string>
+    <string name="weather_loc_allow">允许</string>
+    <string name="weather_loc_later">暂不</string>
 </resources>

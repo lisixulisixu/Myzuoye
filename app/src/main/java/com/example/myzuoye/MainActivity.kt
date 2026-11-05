@@ -32,6 +32,7 @@ import com.example.myzuoye.p2p.P2pController
 import com.example.myzuoye.transfer.TransferManager
 import com.example.myzuoye.ui.DeviceAdapter
 import com.example.myzuoye.ui.MascotView
+import com.example.myzuoye.weather.WeatherRepository
 import com.example.myzuoye.widget.TransferWidgetProvider
 import com.example.myzuoye.widget.WidgetState
 import java.time.LocalTime
@@ -160,12 +161,30 @@ class MainActivity : AppCompatActivity() {
                     showPermissionSettingsDialog()
                 }
             }
+            // 系统弹窗刚关掉，隔一小会儿再问天气定位，避免两个弹窗叠在一起
+            uiHandler.postDelayed({ askWeatherLocationIfNeeded() }, 400L)
         }
 
     private val pickFileLauncher =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri == null) return@registerForActivityResult
             resolveFileInfo(uri)
+        }
+
+    /**
+     * 天气小组件的「大致位置」授权。
+     *
+     * 和传文件用的权限完全分开：传文件在 Android 13+ 走 NEARBY_WIFI_DEVICES（neverForLocation），
+     * 这里单独申请 COARSE，用户拒绝也不影响任何传输功能。
+     */
+    private val weatherLocationLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
+                log("已获得大致位置权限，开始获取天气")
+                WeatherRepository.refreshAsync(this, force = true)
+            } else {
+                log("未授权位置，小组件不显示天气")
+            }
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -255,6 +274,8 @@ class MainActivity : AppCompatActivity() {
 
         // 进入界面时对齐一次小组件状态（应用被杀后桌面上的卡片可能是旧的）
         TransferWidgetProvider.refresh(this)
+        // 天气：内部按 15 分钟节流，无网/无权限时静默跳过，绝不影响传文件流程
+        WeatherRepository.refreshAsync(this)
         renderChat()
         renderChannelState(TransferManager.state, "")
 
@@ -275,6 +296,9 @@ class MainActivity : AppCompatActivity() {
         // 界面可见期间保持搜索活跃，避免系统自动停止后列表不再更新
         uiHandler.removeCallbacks(discoveryLoop)
         uiHandler.postDelayed(discoveryLoop, DISCOVERY_KEEPALIVE_MS)
+
+        // 首次进入时问一次要不要给小组件开放大致位置（只问一次，拒绝也不影响任何功能）
+        uiHandler.postDelayed({ askWeatherLocationIfNeeded() }, 900L)
     }
 
     override fun onStop() {
@@ -479,8 +503,35 @@ class MainActivity : AppCompatActivity() {
         return false
     }
 
-    private fun showPermissionSettingsDialog() {
-        tvP2pState.setText(R.string.p2p_state_no_permission)
+    /**
+     * 询问是否给天气小组件开放「大致位置」。
+     *
+     * 只在 Android 13+ 需要单独问：低版本为了搜设备本来就要定位权限，
+     * 已经拿到就直接用，不重复打扰。
+     * 整个流程只问一次，用户点了「暂不」也不会再弹，小组件上会显示提示文案。
+     */
+    private fun askWeatherLocationIfNeeded() {
+        if (isFinishing || isDestroyed) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (WeatherRepository.hasLocationPermission(this)) return
+        if (permissionRequestInFlight) return
+        if (prefs().getBoolean(KEY_WEATHER_LOC_ASKED, false)) return
+
+        prefs().edit().putBoolean(KEY_WEATHER_LOC_ASKED, true).apply()
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.weather_loc_title)
+            .setMessage(R.string.weather_loc_message)
+            .setPositiveButton(R.string.weather_loc_allow) { _, _ ->
+                weatherLocationLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+            }
+            .setNegativeButton(R.string.weather_loc_later) { _, _ ->
+                log("未开放位置，小组件不显示天气（可在系统设置中随时开启）")
+            }
+            .show()
+    }
+
+    private fun showPermissionSettingsDialog() {        tvP2pState.setText(R.string.p2p_state_no_permission)
         AlertDialog.Builder(this)
             .setTitle(R.string.dialog_permission_title)
             .setMessage(R.string.dialog_permission_message)
@@ -897,6 +948,9 @@ class MainActivity : AppCompatActivity() {
         /** SharedPreferences 文件名与「传输时不玩小游戏」偏好的 key */
         const val PREFS_NAME = "myzuoye_prefs"
         const val KEY_GAME_PROMPT_DISABLED = "game_prompt_disabled"
+
+        /** 「要不要给小组件开放大致位置」是否已经问过（只问一次） */
+        const val KEY_WEATHER_LOC_ASKED = "weather_location_asked"
 
         /** 手动点“搜索设备”的最小间隔，压得太短会频繁触发系统 BUSY */
         const val DISCOVER_DEBOUNCE_MS = 600L

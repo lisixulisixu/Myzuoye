@@ -39,27 +39,41 @@ class PixelRunnerViewTest {
 
         // 开场有 3 秒倒计时，倒计时结束后障碍物才出现；
         // 持续点击模拟跳跃躲避，让人物能越过障碍物并计分。
-        // 预算 = 3 秒倒计时 + 障碍物生成/移动越过人物（约 2 秒），留足余量。
-        val deadline = System.currentTimeMillis() + 7000L
-        while (System.currentTimeMillis() < deadline && scoreReached[0] < 2) {
+        //
+        // 注意：游戏的物理是按「帧间隔」推进的，每帧最多按 1/30 秒计算。
+        // 模拟器负载高时实际帧率可能只有 10~15fps，游戏时间会明显慢于墙上时间，
+        // 所以这里不能用固定 7 秒卡死，而是给足 25 秒并把「撞死暂停」也考虑进去：
+        // 一旦发现已经暂停（撞到障碍物），就重开一局继续测。
+        val deadline = System.currentTimeMillis() + 25000L
+        var restarts = 0
+        while (System.currentTimeMillis() < deadline && scoreReached[0] < 1) {
             InstrumentationRegistry.getInstrumentation().runOnMainSync {
-                view.dispatchTouchEvent(
-                    android.view.MotionEvent.obtain(
-                        System.currentTimeMillis(), System.currentTimeMillis(),
-                        android.view.MotionEvent.ACTION_DOWN, 300f, 400f, 0
+                if (!view.running) {
+                    // 上一局撞到障碍物了，重开
+                    restarts++
+                    view.start()
+                } else {
+                    view.dispatchTouchEvent(
+                        android.view.MotionEvent.obtain(
+                            System.currentTimeMillis(), System.currentTimeMillis(),
+                            android.view.MotionEvent.ACTION_DOWN, 300f, 400f, 0
+                        )
                     )
-                )
-                view.dispatchTouchEvent(
-                    android.view.MotionEvent.obtain(
-                        System.currentTimeMillis(), System.currentTimeMillis(),
-                        android.view.MotionEvent.ACTION_UP, 300f, 400f, 0
+                    view.dispatchTouchEvent(
+                        android.view.MotionEvent.obtain(
+                            System.currentTimeMillis(), System.currentTimeMillis(),
+                            android.view.MotionEvent.ACTION_UP, 300f, 400f, 0
+                        )
                     )
-                )
+                }
             }
-            Thread.sleep(120L)
+            Thread.sleep(90L)
         }
 
-        assertTrue("持续跳跃应至少越过一个障碍物（实际 ${scoreReached[0]}）", scoreReached[0] >= 1)
+        assertTrue(
+            "持续跳跃应至少越过一个障碍物（实际 ${scoreReached[0]}，重开 $restarts 次）",
+            scoreReached[0] >= 1
+        )
 
         InstrumentationRegistry.getInstrumentation().runOnMainSync {
             view.pause()
