@@ -35,14 +35,14 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent" />
 
-            <!-- Q 版人物形象：封面右下角装饰，不遮挡下方交互 -->
+            <!-- Q 版人物形象：封面右下角装饰，不遮挡下方交互；预留上方气泡空间 -->
             <com.example.myzuoye.ui.MascotView
                 android:id="@+id/mascot"
-                android:layout_width="72dp"
-                android:layout_height="96dp"
+                android:layout_width="150dp"
+                android:layout_height="150dp"
                 android:layout_gravity="end|bottom"
-                android:layout_marginEnd="8dp"
-                android:layout_marginBottom="4dp"
+                android:layout_marginEnd="0dp"
+                android:layout_marginBottom="0dp"
                 android:contentDescription="@string/mascot_desc" />
         </FrameLayout>
 

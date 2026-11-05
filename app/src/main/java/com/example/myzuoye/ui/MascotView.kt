@@ -43,13 +43,19 @@ class MascotView @JvmOverloads constructor(
     private var transferring = false
 
     private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { isFilterBitmap = true }
-    private val bubblePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    // 气泡外框（描边）与填充
+    private val bubbleFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
         color = Color.WHITE
     }
+    private val bubbleStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = Color.rgb(180, 180, 195)
+        strokeWidth = 2f * context.resources.displayMetrics.density
+    }
     private val bubbleTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(60, 60, 70)
-        textSize = 30f
+        textSize = 28f
         textAlign = Paint.Align.CENTER
         isFakeBoldText = true
     }
@@ -90,41 +96,57 @@ class MascotView @JvmOverloads constructor(
         val h = height.toFloat()
         if (w <= 0 || h <= 0) return
 
-        // 等比居中绘制图片（图片已是圆角透明贴纸）
+        // 气泡区域占上部约 40%，人物贴纸靠底部绘制
+        val bubbleZone = h * 0.42f
+        val avatarTop = bubbleZone
+        val avatarH = h - avatarTop
+
+        // 等比绘制人物贴纸，贴底部
         val bw = bmp.width.toFloat()
         val bh = bmp.height.toFloat()
-        val scale = (w / bw).coerceAtMost(h / bh)
+        val scale = (w / bw).coerceAtMost(avatarH / bh)
         val dw = bw * scale
         val dh = bh * scale
         val left = (w - dw) / 2f
-        val top = (h - dh) / 2f
+        val top = avatarTop + (avatarH - dh) / 2f
         canvas.drawBitmap(bmp, null, RectF(left, top, left + dw, top + dh), bitmapPaint)
 
-        // 气泡
+        // 气泡（绘制在人物上方，独立于人物之外，尾巴指向下方人物）
         bubbleText?.let { drawBubble(canvas, it) }
     }
 
     private fun drawBubble(canvas: Canvas, text: String) {
         val w = width.toFloat()
-        val h = height.toFloat()
-        val textSize = 30f * density
+        val textSize = 22f * density
         bubbleTextPaint.textSize = textSize
-        val bubbleH = 48f * density
         val textW = bubbleTextPaint.measureText(text)
-        val bubbleW = textW + 40f * density
-        val cx = w / 2f
-        val top = h - bubbleH - 6f * density
+        val bubbleH = 42f * density
+        val bubbleW = (textW + 28f * density).coerceAtLeast(64f * density)
+        // 气泡水平居中，但钳制在 view 内，避免超出右边缘被裁切
+        var cx = w / 2f
+        val half = bubbleW / 2f
+        if (cx - half < 0f) cx = half
+        if (cx + half > w) cx = w - half
+        // 气泡浮在人物上方（view 顶部区域）
+        val top = 4f * density
+        val rect = RectF(cx - half, top, cx + half, top + bubbleH)
 
-        val rect = RectF(cx - bubbleW / 2f, top, cx + bubbleW / 2f, top + bubbleH)
-        val path = Path().apply { addRoundRect(rect, 22f * density, 22f * density, Path.Direction.CW) }
-        canvas.drawPath(path, bubblePaint)
-        val tri = Path().apply {
-            moveTo(cx - 8f * density, rect.bottom)
-            lineTo(cx + 8f * density, rect.bottom)
-            lineTo(cx, rect.bottom + 10f * density)
+        // 尾巴：从气泡底部中心指向下方的人物
+        val tailTipY = top + bubbleH + 14f * density
+        val tailPath = Path().apply {
+            moveTo(rect.centerX() - 8f * density, rect.bottom)
+            lineTo(rect.centerX() + 8f * density, rect.bottom)
+            lineTo(rect.centerX(), tailTipY)
             close()
         }
-        canvas.drawPath(tri, bubblePaint)
+
+        val bubblePath = Path().apply {
+            addRoundRect(rect, 20f * density, 20f * density, Path.Direction.CW)
+        }
+        canvas.drawPath(bubblePath, bubbleFillPaint)
+        canvas.drawPath(tailPath, bubbleFillPaint)
+        // 描边让气泡框更接近“手绘框”效果
+        canvas.drawPath(bubblePath, bubbleStrokePaint)
 
         val baseline = rect.centerY() - (bubbleTextPaint.descent() + bubbleTextPaint.ascent()) / 2f
         canvas.drawText(text, cx, baseline, bubbleTextPaint)

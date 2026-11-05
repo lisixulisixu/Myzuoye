@@ -1,19 +1,23 @@
 package com.example.myzuoye.ui
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.View
+import com.example.myzuoye.R
 
 /**
- * 像素风跑酷小游戏：人物在左侧原地跑动，障碍物从右往左移动，点击屏幕让人物跳跃。
+ * 跑酷小游戏：Q 版女仆角色在左侧跳跃，障碍物从右往左移动，点击屏幕让角色跳跃。
  *
  * 设计约束：
- * - 纯 Canvas 绘制像素块，无位图资源，开销极小；
+ * - 角色用透明 PNG 贴纸绘制（[R.drawable.mascot_runner]），障碍物仍用像素块；
  * - 用 [Choreographer] 驱动游戏循环（与屏幕刷新帧同步），[onDetachedFromWindow] 自动暂停，不空转耗电；
  * - 只有“点击跳跃”一个操作，点击屏幕任意位置都触发，符合“传输时单手可玩”的场景。
  */
@@ -41,6 +45,10 @@ class PixelRunnerView @JvmOverloads constructor(
     private var obstacles = mutableListOf<Obstacle>()
     private var spawnTimer = 0f
 
+    /** 是否处于开场倒计时（3-2-1），倒计时结束才真正开始跑 */
+    private var countingDown = false
+    private var countdownRemaining = 0f
+
     // 尺寸（onSizeChanged 里确定）
     private var groundY = 0f
     private var playerX = 0f
@@ -50,9 +58,24 @@ class PixelRunnerView @JvmOverloads constructor(
     private var lastFrameNanos = 0L
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val playerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { isFilterBitmap = true }
+    private val countdownPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(70, 70, 90)
+        textSize = 72f * context.resources.displayMetrics.density
+        textAlign = Paint.Align.CENTER
+        isFakeBoldText = true
+    }
+
+    /** 角色立绘（透明 PNG） */
+    private var playerBitmap: Bitmap? = null
 
     // 像素块尺寸：一个“像素”= px 单位，所有图形都是它的整数倍，保持像素风
     private var px = 1f
+
+    init {
+        playerBitmap = runCatching { BitmapFactory.decodeResource(resources, R.drawable.mascot_runner) }
+            .getOrNull()
+    }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
@@ -78,6 +101,9 @@ class PixelRunnerView @JvmOverloads constructor(
         grounded = true
         obstacles.clear()
         spawnTimer = 0f
+        // 开场 3 秒倒计时
+        countingDown = true
+        countdownRemaining = COUNTDOWN_SECONDS
         onScoreChanged?.invoke(score)
         startLoop()
         invalidate()
@@ -114,6 +140,17 @@ class PixelRunnerView @JvmOverloads constructor(
     }
 
     private fun tick(dt: Float) {
+        // 倒计时：3-2-1，期间不移动、不生成障碍物，人物站在地面待命
+        if (countingDown) {
+            countdownRemaining -= dt
+            if (countdownRemaining <= 0f) {
+                countingDown = false
+                countdownRemaining = 0f
+                spawnTimer = 0.3f // 倒计时结束后稍等片刻再出第一个障碍物
+            }
+            return
+        }
+
         // 跳跃物理
         if (!grounded) {
             playerVy += GRAVITY * px * dt
@@ -187,7 +224,7 @@ class PixelRunnerView @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (event.actionMasked == MotionEvent.ACTION_DOWN && running && grounded) {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN && running && grounded && !countingDown) {
             jump()
             performClick()
             return true
@@ -227,8 +264,17 @@ class PixelRunnerView @JvmOverloads constructor(
             drawObstacle(canvas, ob)
         }
 
-        // 人物（像素小人）
+        // 人物（Q 版女仆立绘）
         drawPlayer(canvas)
+
+        // 倒计时数字（覆盖在画面中央上方）
+        if (countingDown && countdownRemaining > 0f) {
+            val number = kotlin.math.ceil(countdownRemaining).toInt()
+            val cx = w / 2f
+            val cy = h / 3f
+            // 半透明背景让数字更醒目
+            canvas.drawText("$number", cx, cy, countdownPaint)
+        }
     }
 
     private fun drawObstacle(canvas: Canvas, ob: Obstacle) {
@@ -244,21 +290,36 @@ class PixelRunnerView @JvmOverloads constructor(
     }
 
     private fun drawPlayer(canvas: Canvas) {
+        val bmp = playerBitmap
+        if (bmp == null) {
+            // 立绘缺失时回退到像素小人
+            drawPlayerFallback(canvas)
+            return
+        }
+        val x = playerX
+        val y = playerY
+        val ph = PLAYER_H * px
+        // 按立绘宽高比换算宽度
+        val pw = ph * (bmp.width.toFloat() / bmp.height.toFloat())
+        // 底部对齐地面，让角色“站在”地面上
+        val left = x
+        val top = y - ph
+        canvas.drawBitmap(bmp, null, RectF(left, top, left + pw, y), playerPaint)
+    }
+
+    /** 立绘加载失败时的像素小人回退 */
+    private fun drawPlayerFallback(canvas: Canvas) {
         val x = playerX
         val y = playerY
         val pw = PLAYER_W * px
         val ph = PLAYER_H * px
 
-        // 身体（矩形）
         paint.color = BODY
         canvas.drawRect(x, y - ph, x + pw, y, paint)
-        // 头（上方一个像素块）
         paint.color = HEAD
         canvas.drawRect(x + px, y - ph - 4 * px, x + pw - px, y - ph, paint)
-        // 眼睛
         paint.color = EYE
         canvas.drawRect(x + 2 * px, y - ph - 3 * px, x + 3 * px, y - ph - 2 * px, paint)
-        // 腿（奔跑时交替，简化成两个像素）
         paint.color = LEG
         val legShift = if ((System.currentTimeMillis() / 120) % 2 == 0L) 0f else px
         canvas.drawRect(x + px, y - px, x + 2 * px, y, paint)
@@ -287,6 +348,7 @@ class PixelRunnerView @JvmOverloads constructor(
         const val OBSTACLE_SPEED = 260f    // 障碍物移动速度（像素/秒）
         const val MIN_SPAWN = 0.9f         // 生成间隔下限（秒）
         const val MAX_SPAWN = 1.6f         // 生成间隔上限（秒）
+        const val COUNTDOWN_SECONDS = 3f   // 开场倒计时秒数
 
         // 配色（像素风，低饱和）
         val SKY = Color.rgb(235, 242, 250)

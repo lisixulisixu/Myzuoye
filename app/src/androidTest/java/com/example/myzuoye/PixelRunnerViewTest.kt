@@ -37,8 +37,10 @@ class PixelRunnerViewTest {
         }
         assertTrue("start 后应处于运行状态", runningState[0])
 
-        // 持续点击模拟跳跃，躲避障碍物，让人物能越过它们并计分
-        val deadline = System.currentTimeMillis() + 4000L
+        // 开场有 3 秒倒计时，倒计时结束后障碍物才出现；
+        // 持续点击模拟跳跃躲避，让人物能越过障碍物并计分。
+        // 预算 = 3 秒倒计时 + 障碍物生成/移动越过人物（约 2 秒），留足余量。
+        val deadline = System.currentTimeMillis() + 7000L
         while (System.currentTimeMillis() < deadline && scoreReached[0] < 2) {
             InstrumentationRegistry.getInstrumentation().runOnMainSync {
                 view.dispatchTouchEvent(
