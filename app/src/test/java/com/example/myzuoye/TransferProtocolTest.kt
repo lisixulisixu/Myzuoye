@@ -208,4 +208,163 @@ class TransferProtocolTest {
         // 关键断言：协议里存大写，本地算小写，必须忽略大小写才相等
         assertTrue(header.md5Hex.equals(Checksum.md5Hex(receivedBytes), ignoreCase = true))
     }
+
+    // ------------------------------------------------------------------ v2：流式 MD5
+
+    @Test
+    fun emptyMd5InHeaderIsWrittenAsPlaceholder() {
+        val buffer = ByteArrayOutputStream()
+        TransferProtocol.writeFileHeader(
+            DataOutputStream(buffer),
+            TransferProtocol.FileHeader("big.bin", 999L, "")
+        )
+
+        val parsed = TransferProtocol.readFrame(
+            DataInputStream(ByteArrayInputStream(buffer.toByteArray()))
+        )!!.asFileHeader()
+
+        // 占位符原样写进去，但上层要能判断出「这不是真 MD5」
+        assertEquals(TransferProtocol.MD5_PLACEHOLDER, parsed.md5Hex)
+        assertEquals(false, parsed.md5Known)
+    }
+
+    @Test
+    fun endFrameWithMd5IsParseableBothWays() {
+        val md5 = "ABCDEF0123456789ABCDEF0123456789"
+        val buffer = ByteArrayOutputStream()
+        TransferProtocol.writeFileEnd(DataOutputStream(buffer), 1024L, md5)
+
+        val frame = TransferProtocol.readFrame(
+            DataInputStream(ByteArrayInputStream(buffer.toByteArray()))
+        )!!
+
+        // 新接口拿到 MD5；旧接口仍然只拿字节数（保证老代码不用改）
+        val end = frame.asFileEnd()
+        assertEquals(1024L, end.totalBytes)
+        assertEquals(md5, end.md5Hex)
+        assertEquals(1024L, frame.asLong())
+    }
+
+    @Test
+    fun legacyEndFrameHasNoMd5() {
+        val buffer = ByteArrayOutputStream()
+        TransferProtocol.writeFileEnd(DataOutputStream(buffer), 42L)
+
+        val end = TransferProtocol.readFrame(
+            DataInputStream(ByteArrayInputStream(buffer.toByteArray()))
+        )!!.asFileEnd()
+
+        assertEquals(42L, end.totalBytes)
+        // 老客户端发来的结束帧只有 8 字节，没有 MD5
+        assertNull(end.md5Hex)
+    }
+
+    // ------------------------------------------------------------------ 版本协商与续传
+
+    @Test
+    fun currentVersionSupportsResume() {
+        val buffer = ByteArrayOutputStream()
+        TransferProtocol.writeFileHeader(
+            DataOutputStream(buffer),
+            TransferProtocol.FileHeader("a.txt", 10L, "")
+        )
+        val header = TransferProtocol.readFrame(
+            DataInputStream(ByteArrayInputStream(buffer.toByteArray()))
+        )!!.asFileHeader()
+
+        assertEquals(TransferProtocol.VERSION.toInt(), header.version)
+        assertTrue(header.supportsResume)
+    }
+
+    @Test
+    fun legacyVersionDoesNotSupportResume() {
+        // 手工拼一个「老客户端」的文件头：版本字节为 0，结尾没有额外字段
+        val name = "old.txt".toByteArray(Charsets.UTF_8)
+        val payload = java.io.ByteArrayOutputStream()
+        payload.write(0) // version 0
+        payload.write(name.size ushr 8)
+        payload.write(name.size and 0xFF)
+        payload.write(name)
+        payload.write(ByteArray(8) { 0 }) // fileSize = 0
+        payload.write(ByteArray(32) { 'A'.code.toByte() }) // md5
+
+        val bytes = payload.toByteArray()
+        val frameBytes = ByteArrayOutputStream().apply {
+            write(TransferProtocol.TYPE_FILE_HEADER.toInt())
+            DataOutputStream(this).writeInt(bytes.size)
+            write(bytes)
+        }.toByteArray()
+
+        val header = TransferProtocol.readFrame(
+            DataInputStream(ByteArrayInputStream(frameBytes))
+        )!!.asFileHeader()
+
+        assertEquals(0, header.version)
+        // 关键：老客户端不会等续传应答，服务端就不能给它发，否则文件会被写坏
+        assertEquals(false, header.supportsResume)
+    }
+
+    @Test
+    fun resumeFrameRoundTrip() {
+        val buffer = ByteArrayOutputStream()
+        TransferProtocol.writeFileResume(DataOutputStream(buffer), 8L * 1024 * 1024)
+
+        val frame = TransferProtocol.readFrame(
+            DataInputStream(ByteArrayInputStream(buffer.toByteArray()))
+        )!!
+        assertEquals(TransferProtocol.TYPE_FILE_RESUME, frame.type)
+        assertEquals(8L * 1024 * 1024, frame.asResumeOffset())
+    }
+
+    @Test
+    fun resumeOffsetsAtBoundaries() {
+        // 0 表示「我没有半成品，从头传」
+        val zero = ByteArrayOutputStream()
+        TransferProtocol.writeFileResume(DataOutputStream(zero), 0L)
+        assertEquals(
+            0L,
+            TransferProtocol.readFrame(DataInputStream(ByteArrayInputStream(zero.toByteArray())))!!
+                .asResumeOffset()
+        )
+
+        // 等于总长表示「我已经收完了」，发送端应当直接发结束帧
+        val whole = ByteArrayOutputStream()
+        TransferProtocol.writeFileResume(DataOutputStream(whole), 123_456L)
+        assertEquals(
+            123_456L,
+            TransferProtocol.readFrame(DataInputStream(ByteArrayInputStream(whole.toByteArray())))!!
+                .asResumeOffset()
+        )
+    }
+
+    // ------------------------------------------------------------------ 异常输入
+
+    @Test
+    fun truncatedPayloadThrowsInsteadOfReturningGarbage() {
+        val buffer = ByteArrayOutputStream()
+        val out = DataOutputStream(buffer)
+        out.writeByte(TransferProtocol.TYPE_TEXT.toInt())
+        out.writeInt(100) // 声明 100 字节
+        out.write("only-ten!!".toByteArray()) // 实际不到
+        out.flush()
+
+        assertThrows(java.io.EOFException::class.java) {
+            TransferProtocol.readFrame(DataInputStream(ByteArrayInputStream(buffer.toByteArray())))
+        }
+    }
+
+    @Test
+    fun wrongFrameTypeIsRejected() {
+        val buffer = ByteArrayOutputStream()
+        TransferProtocol.writeText(DataOutputStream(buffer), "not a header")
+
+        val frame = TransferProtocol.readFrame(
+            DataInputStream(ByteArrayInputStream(buffer.toByteArray()))
+        )!!
+
+        // 类型不对必须抛，不能当成文件头去解析（否则会读出乱七八糟的文件名）
+        assertThrows(IllegalStateException::class.java) { frame.asFileHeader() }
+        assertThrows(IllegalStateException::class.java) { frame.asFileEnd() }
+        assertThrows(IllegalStateException::class.java) { frame.asResumeOffset() }
+    }
 }

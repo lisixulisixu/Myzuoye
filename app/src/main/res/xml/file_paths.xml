@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 只暴露日志目录。
+  导出诊断日志时用 content:// 分享，避免 API 24+ 的 FileUriExposedException。
+-->
+<paths>
+    <files-path
+        name="logs"
+        path="logs/" />
+</paths>

@@ -1,9 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  玻璃面板：半透明白 + 自上而下的微弱渐变 + 1dp 描边。
+  深色背景上这种「薄玻璃」比纯色块有层次，也不会把底下的流动光效完全挡住。
+-->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <solid android:color="#0F000000" />
+    <gradient
+        android:angle="270"
+        android:endColor="#0AFFFFFF"
+        android:startColor="#24FFFFFF" />
     <stroke
         android:width="1dp"
-        android:color="#1F000000" />
-    <corners android:radius="12dp" />
+        android:color="@color/panel_stroke" />
+    <corners android:radius="16dp" />
 </shape>

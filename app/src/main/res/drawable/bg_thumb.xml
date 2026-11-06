@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 缩略图底板：深色玻璃，图片没解出来时也不会是突兀的黑块 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#1FFFFFFF" />
+    <corners android:radius="12dp" />
+</shape>

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  深色模式下再把对比拉高一点：底色更黑、光斑更淡。
+  应用本身已经是深色风格，这里只做「更暗一档」的微调，不改变整体观感。
+-->
+<resources>
+    <color name="bg_grad_top">#05080F</color>
+    <color name="bg_grad_bottom">#0B0F1A</color>
+    <color name="bg_accent_1">#101827</color>
+    <color name="bg_accent_2">#1A1226</color>
+
+    <color name="flow_bg_1">#04070D</color>
+    <color name="flow_bg_2">#0A101C</color>
+    <color name="flow_bg_3">#120C28</color>
+    <color name="flow_bg_4">#06121A</color>
+
+    <color name="flow_glow_1">#5A4F8BFF</color>
+    <color name="flow_glow_2">#4A9B6BFF</color>
+    <color name="flow_glow_3">#4422D3EE</color>
+    <color name="flow_glow_4">#38F472B6</color>
+
+    <color name="text_primary">#E6ECF8</color>
+    <color name="text_secondary">#94A5C2</color>
+
+    <color name="panel_fill">#2BFFFFFF</color>
+    <color name="panel_stroke">#2BFFFFFF</color>
+
+    <color name="surface">#0F1523</color>
+    <color name="surface_variant">#182032</color>
+    <color name="surface_stroke">#2BFFFFFF</color>
+</resources>

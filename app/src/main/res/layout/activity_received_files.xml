@@ -30,14 +30,57 @@
                 android:layout_weight="1"
                 android:text="@string/files_title"
                 android:textSize="18sp"
-                android:textStyle="bold" />
+                android:textStyle="bold" 
+            android:textColor="@color/text_primary"/>
 
             <TextView
                 android:id="@+id/tvFilesCount"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textSize="12sp" />
+                android:textSize="12sp" 
+            android:textColor="@color/text_secondary"/>
         </LinearLayout>
+
+        <!-- 类型筛选。用一排 chip 而不是下拉菜单：文件类型就这么几类，
+             一眼能看到的筛选项比藏起来的菜单好点 -->
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingHorizontal="12dp"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingBottom="8dp">
+
+                <TextView
+                    android:id="@+id/chipAll"
+                    style="@style/FileFilterChip"
+                    android:text="@string/files_filter_all" />
+
+                <TextView
+                    android:id="@+id/chipImage"
+                    style="@style/FileFilterChip"
+                    android:text="@string/files_filter_image" />
+
+                <TextView
+                    android:id="@+id/chipVideo"
+                    style="@style/FileFilterChip"
+                    android:text="@string/files_filter_video" />
+
+                <TextView
+                    android:id="@+id/chipDoc"
+                    style="@style/FileFilterChip"
+                    android:text="@string/files_filter_doc" />
+
+                <TextView
+                    android:id="@+id/chipOther"
+                    style="@style/FileFilterChip"
+                    android:text="@string/files_filter_other" />
+            </LinearLayout>
+        </HorizontalScrollView>
 
         <TextView
             android:id="@+id/tvFilesEmpty"
@@ -47,7 +90,8 @@
             android:padding="32dp"
             android:text="@string/files_empty"
             android:textSize="14sp"
-            android:visibility="gone" />
+            android:visibility="gone" 
+            android:textColor="@color/text_secondary"/>
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/rvFiles"
@@ -56,6 +100,7 @@
             android:layout_weight="1"
             android:clipToPadding="false"
             android:paddingHorizontal="8dp"
+            android:paddingBottom="12dp"
             android:scrollbars="vertical" />
 
     </LinearLayout>

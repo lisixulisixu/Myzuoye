@@ -11,10 +11,13 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
@@ -24,19 +27,32 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.children
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.example.myzuoye.net.LanAddress
 import com.example.myzuoye.p2p.P2pController
+import com.example.myzuoye.transfer.PartialStore
+import com.example.myzuoye.transfer.SendItem
+import com.example.myzuoye.transfer.SendQueue
 import com.example.myzuoye.transfer.TransferManager
+import com.example.myzuoye.ui.AppDialog
 import com.example.myzuoye.ui.DeviceAdapter
 import com.example.myzuoye.ui.MascotView
+import com.example.myzuoye.util.Formatters
 import com.example.myzuoye.weather.WeatherRepository
 import com.example.myzuoye.widget.TransferWidgetProvider
 import com.example.myzuoye.widget.WidgetState
+import java.io.File
+import java.text.SimpleDateFormat
+import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import java.util.Date
+import java.util.Locale
 
 /**
  * M1：授权 → 搜索 → 连接 → 显示角色与组主地址。
@@ -54,6 +70,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvPeerHint: TextView
     private lateinit var tvLog: TextView
     private lateinit var rvDevices: RecyclerView
+    private lateinit var tvDevicesEmpty: TextView
     private lateinit var btnDiscover: Button
     private lateinit var btnCreateGroup: Button
     private lateinit var btnDisconnect: Button
@@ -69,14 +86,27 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnViewFiles: Button
     private lateinit var pbTransfer: ProgressBar
     private lateinit var tvTransferState: TextView
+    private lateinit var btnCancelTransfer: TextView
 
     /** Q 版人物形象 */
     private lateinit var mascot: MascotView
 
-    /** 待发送的文件信息：uri + 显示名 + 大小。选完文件后由 pickFileLauncher 填充 */
+    /** 待发送的文件信息：uri + 显示名 + 大小。由发送队列在「轮到它」时填充 */
     private var pendingUri: Uri? = null
     private var pendingName: String = ""
     private var pendingSize: Long = 0
+
+    /** 发送队列：多选的文件排队一个个发 */
+    private lateinit var sendQueue: SendQueue
+
+    /** 用户主动点了取消：用来把「发送失败」的文案换成「已取消」，别让人以为出了故障 */
+    private var userCancelled = false
+
+    /** 从别的应用分享进来但当时还没连接的文件，连上后自动排队 */
+    private var pendingShareUris: List<Uri> = emptyList()
+
+    /** 「改用局域网直连」的提示只给一次 */
+    private var p2pHintShown = false
 
     /** 传输期间弹出的小游戏窗口 */
     private var transferGame: TransferGame? = null
@@ -166,9 +196,9 @@ class MainActivity : AppCompatActivity() {
         }
 
     private val pickFileLauncher =
-        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            if (uri == null) return@registerForActivityResult
-            resolveFileInfo(uri)
+        registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+            if (uris.isNullOrEmpty()) return@registerForActivityResult
+            enqueueFiles(uris)
         }
 
     /**
@@ -210,6 +240,43 @@ class MainActivity : AppCompatActivity() {
         // M4：attach 应用上下文，供前台服务保活使用
         TransferManager.attach(this)
 
+        // 清掉过期的大文件半成品（断点续传用），只在启动时扫一次，不进传输路径
+        PartialStore.cleanup(this)
+
+        sendQueue = SendQueue(
+            opener = { uri -> runCatching { contentResolver.openInputStream(uri) }.getOrNull() },
+            onItemStart = { item, index, total ->
+                pendingUri = item.uri
+                pendingName = item.name
+                pendingSize = item.size
+                if (total > 1) log("发送第 $index/$total 个：${item.name}")
+                // Q 版人物：传输开始提醒
+                mascot.showTransferring()
+                // 游戏只问一次（排在队首那一个），后面几个不再反复打扰
+                if (index == 1 && !gamePromptDisabled) askToPlayGame(item.name)
+            },
+            onItemDone = { item, ok ->
+                if (!ok) log("发送失败：${item.name}")
+                val left = sendQueue.pendingCount
+                if (left > 0) toast(getString(R.string.send_queue_next, left))
+            },
+            onAllDone = { okCount, failCount ->
+                tvTransferState.text = if (failCount == 0) {
+                    getString(R.string.send_queue_all_done, okCount)
+                } else {
+                    getString(R.string.send_queue_partial, okCount, failCount)
+                }
+                updateCancelButton()
+            }
+        )
+
+        // 从相册/文件管理器「分享」进来的文件
+        handleShareIntent(intent)
+
+        // 轻量入场动画：区块依次淡入，不影响任何交互
+        playEntranceAnimation()
+        updateDevicesEmpty()
+
         btnDiscover.setOnClickListener { startDiscovery(force = true) }
         btnCreateGroup.setOnClickListener { controller.createGroup() }
         btnDisconnect.setOnClickListener {
@@ -221,6 +288,16 @@ class MainActivity : AppCompatActivity() {
         btnPickFile.setOnClickListener { pickFile() }
         btnViewFiles.setOnClickListener {
             startActivity(Intent(this, ReceivedFilesActivity::class.java))
+        }
+        btnCancelTransfer.setOnClickListener {
+            // 先把队列清掉，否则取消完当前这个，队列会立刻接着发下一个
+            val hadQueue = sendQueue.pendingCount > 0
+            sendQueue.clear()
+            userCancelled = TransferManager.isSending
+            val cancelled = TransferManager.cancelSend()
+            toast(getString(if (cancelled) R.string.transfer_cancelled else R.string.queue_cleared))
+            if (!cancelled && hadQueue) log("已清空发送队列")
+            updateCancelButton()
         }
         btnPlayGame.setOnClickListener { openGameForFun() }
         // 长按「玩游戏」：恢复「传输时询问要不要玩」的提示
@@ -249,8 +326,8 @@ class MainActivity : AppCompatActivity() {
         // 通道回调只在界面可见时挂载，避免 Activity 泄漏
         TransferManager.onStateChanged = { state, message -> renderChannelState(state, message) }
         TransferManager.onMessage = { line -> appendChat(line) }
-        TransferManager.onReceiveProgress = { progress ->
-            renderReceiveProgress(progress)
+        TransferManager.onReceiveProgress = { progress, speed ->
+            renderReceiveProgress(progress, speed)
             // 小组件：接收中显示文件名（同一文件的高频进度回调会被去重，不会反复刷）
             WidgetState.setTransferring(this, true, TransferManager.receivingFileName)
         }
@@ -259,8 +336,8 @@ class MainActivity : AppCompatActivity() {
             WidgetState.setTransferring(this, false)
             if (path != null) WidgetState.addReceivedFile(this)
         }
-        TransferManager.onSendProgress = { progress ->
-            renderSendProgress(progress)
+        TransferManager.onSendProgress = { progress, speed ->
+            renderSendProgress(progress, speed)
             transferGame?.onProgress(pendingName, progress)
             WidgetState.setTransferring(this, true, pendingName)
         }
@@ -270,6 +347,8 @@ class MainActivity : AppCompatActivity() {
             WidgetState.setTransferring(this, false)
             // Q 版人物：传输结束提醒
             if (ok) mascot.showDone() else mascot.showFail()
+            // 交给队列决定要不要接着发下一个（顺序不能反：上面几行还要用到刚发完的文件名）
+            sendQueue.onTransferFinished(ok)
         }
 
         // 进入界面时对齐一次小组件状态（应用被杀后桌面上的卡片可能是旧的）
@@ -317,7 +396,12 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         controller.release()
         // 只有真正退出界面才断开通道，旋转屏幕时保持连接
-        if (isFinishing) TransferManager.stop()
+        if (isFinishing) {
+            TransferManager.stop()
+            // 通道已经主动关掉，桌面小组件不该继续显示「已连接」
+            WidgetState.setConnected(this, false)
+            WidgetState.setTransferring(this, false)
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -334,6 +418,7 @@ class MainActivity : AppCompatActivity() {
         tvPeerHint = findViewById(R.id.tvPeerHint)
         tvLog = findViewById(R.id.tvLog)
         rvDevices = findViewById(R.id.rvDevices)
+        tvDevicesEmpty = findViewById(R.id.tvDevicesEmpty)
         btnDiscover = findViewById(R.id.btnDiscover)
         btnCreateGroup = findViewById(R.id.btnCreateGroup)
         btnDisconnect = findViewById(R.id.btnDisconnect)
@@ -349,8 +434,37 @@ class MainActivity : AppCompatActivity() {
         btnViewFiles = findViewById(R.id.btnViewFiles)
         pbTransfer = findViewById(R.id.pbTransfer)
         tvTransferState = findViewById(R.id.tvTransferState)
+        btnCancelTransfer = findViewById(R.id.btnCancelTransfer)
 
         mascot = findViewById(R.id.mascot)
+
+        // 长按日志区：导出 / 清空。真机出问题时不用连电脑也能把日志取出来
+        tvLog.setOnLongClickListener {
+            showLogMenu()
+            true
+        }
+    }
+
+    /**
+     * 入场动画：各区块依次淡入并轻微上移。
+     *
+     * 只用 alpha 与 translationY，不改布局参数，所以不会引起重新测量；
+     * 幅度 12dp、每块间隔 40ms，够轻，不会让人觉得「打开了什么特效页面」。
+     */
+    private fun playEntranceAnimation() {
+        val root = findViewById<ViewGroup>(R.id.root) ?: return
+        val column = root.getChildAt(1) as? LinearLayout ?: return
+        val density = resources.displayMetrics.density
+        column.children.forEachIndexed { index, view ->
+            view.alpha = 0f
+            view.translationY = 16f * density
+            view.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setStartDelay(index * 40L)
+                .setDuration(320L)
+                .start()
+        }
     }
 
     private fun applyWindowInsets() {
@@ -375,12 +489,14 @@ class MainActivity : AppCompatActivity() {
                 searching = false
                 adapter.clear()
                 tvPeerHint.setText(R.string.nearby_devices_zero)
+                updateDevicesEmpty()
             }
         }
 
         controller.onPeersChanged = { peers ->
             val changed = adapter.submit(peers)
             tvPeerHint.text = getString(R.string.nearby_devices, peers.size)
+            updateDevicesEmpty()
             // 只在数量真的变化时打日志，避免每次刷新都刷屏
             if (changed && peers.size != lastPeerCount) {
                 lastPeerCount = peers.size
@@ -519,7 +635,7 @@ class MainActivity : AppCompatActivity() {
 
         prefs().edit().putBoolean(KEY_WEATHER_LOC_ASKED, true).apply()
 
-        AlertDialog.Builder(this)
+        AppDialog.builder(this)
             .setTitle(R.string.weather_loc_title)
             .setMessage(R.string.weather_loc_message)
             .setPositiveButton(R.string.weather_loc_allow) { _, _ ->
@@ -532,7 +648,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPermissionSettingsDialog() {        tvP2pState.setText(R.string.p2p_state_no_permission)
-        AlertDialog.Builder(this)
+        AppDialog.builder(this)
             .setTitle(R.string.dialog_permission_title)
             .setMessage(R.string.dialog_permission_message)
             .setPositiveButton(R.string.action_go_settings) { _, _ ->
@@ -647,27 +763,118 @@ class MainActivity : AppCompatActivity() {
      * ```
      */
     private fun showChannelDebugMenu() {
-        val items = arrayOf("仅本地监听（调试）", "手动连接…（调试）", "清空聊天记录")
-        AlertDialog.Builder(this)
+        val items = arrayOf(
+            getString(R.string.lan_direct),
+            "仅本地监听（调试）",
+            "手动连接…（调试）",
+            "清空聊天记录"
+        )
+        AppDialog.builder(this)
             .setTitle(R.string.channel_debug_title)
             .setItems(items) { _, which ->
                 when (which) {
-                    0 -> {
+                    0 -> showLanDirectDialog()
+
+                    1 -> {
                         TransferManager.stop()
                         TransferManager.setP2pNetwork(null)
                         TransferManager.startServer()
                         log("调试：开始监听 ${TransferManager.port}")
                     }
 
-                    1 -> showManualConnectDialog()
+                    2 -> showManualConnectDialog()
 
-                    2 -> {
+                    3 -> {
                         TransferManager.clearHistory()
                         renderChat()
                     }
                 }
             }
             .show()
+    }
+
+    /**
+     * 局域网直连。
+     *
+     * 这是 Wi-Fi Direct 的兜底通道：两台设备连同一个 Wi-Fi，一台当服务端，另一台输入对方 IP。
+     * 走的还是同一套 TCP + 帧协议，所以文本、文件、断点续传全都照旧可用。
+     * 国产 ROM 上 P2P 被限制时，这条路基本必然能通（除了路由器开了 AP 隔离）。
+     */
+    private fun showLanDirectDialog() {
+        val ip = LanAddress.primaryIpv4()
+        val port = TransferManager.port
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val pad = (20 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad / 2, pad, 0)
+        }
+
+        val info = TextView(this).apply {
+            text = if (ip == null) {
+                getString(R.string.lan_no_ip)
+            } else {
+                getString(R.string.lan_local_addr, "$ip:$port")
+            }
+            textSize = 13f
+        }
+
+        val hintView = TextView(this).apply {
+            text = getString(R.string.lan_hint_body)
+            textSize = 12f
+            setPadding(0, (6 * resources.displayMetrics.density).toInt(), 0, 0)
+        }
+
+        val input = EditText(this).apply {
+            hint = getString(R.string.lan_peer_hint)
+            setSingleLine(true)
+        }
+
+        container.addView(info)
+        container.addView(hintView)
+        container.addView(input)
+
+        AppDialog.builder(this)
+            .setTitle(R.string.lan_dialog_title)
+            .setView(container)
+            .setPositiveButton(R.string.lan_connect) { _, _ ->
+                connectLan(input.text.toString())
+            }
+            .setNeutralButton(R.string.lan_listen) { _, _ -> listenLan() }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** 作为服务端在局域网上监听，等对方输入本机地址连过来 */
+    private fun listenLan() {
+        TransferManager.stop()
+        // 局域网通道不绑 P2P 网卡，否则包会被丢进 192.168.49.x 那条路由
+        TransferManager.setP2pNetwork(null)
+        TransferManager.startServer()
+        val ip = LanAddress.primaryIpv4()
+        val addr = if (ip == null) "本机 IP（未连 Wi-Fi）" else "$ip:${TransferManager.port}"
+        log("局域网监听已开启：$addr")
+        toast(getString(R.string.lan_listen_started, addr))
+    }
+
+    private fun connectLan(raw: String) {
+        val text = raw.trim()
+        if (text.isEmpty()) return
+        val (host, port) = parseHostPort(text)
+        TransferManager.stop()
+        TransferManager.setP2pNetwork(null)
+        TransferManager.connect(host, port)
+        log("局域网直连 $host:$port")
+    }
+
+    /** 支持 `1.2.3.4` 和 `1.2.3.4:8988` 两种写法 */
+    private fun parseHostPort(text: String): Pair<String, Int> {
+        val parts = text.split(":")
+        return if (parts.size >= 2) {
+            parts[0] to (parts[1].toIntOrNull() ?: TransferManager.port)
+        } else {
+            text to TransferManager.port
+        }
     }
 
     private fun showManualConnectDialog() {
@@ -677,22 +884,13 @@ class MainActivity : AppCompatActivity() {
             setSelectAllOnFocus(true)
         }
 
-        AlertDialog.Builder(this)
+        AppDialog.builder(this)
             .setTitle(R.string.channel_debug_connect)
             .setView(input)
             .setPositiveButton(android.R.string.ok) { _, _ ->
                 val text = input.text.toString().trim()
                 if (text.isEmpty()) return@setPositiveButton
-                val host: String
-                val port: Int
-                val parts = text.split(":")
-                if (parts.size == 2) {
-                    host = parts[0]
-                    port = parts[1].toIntOrNull() ?: TransferManager.port
-                } else {
-                    host = text
-                    port = TransferManager.port
-                }
+                val (host, port) = parseHostPort(text)
                 TransferManager.stop()
                 // 调试通道走的是 loopback / adb 转发，不属于 P2P 网络，
                 // 绑着 P2P 网络反而连不通，这里先解绑
@@ -718,6 +916,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** 列表为空时显示引导文案，有设备就藏起来 */
+    private fun updateDevicesEmpty() {
+        tvDevicesEmpty.visibility = if (adapter.itemCount == 0) View.VISIBLE else View.GONE
+    }
+
     private fun renderChannelState(state: TransferManager.State, message: String) {
         if (message.isNotBlank()) log(message)
 
@@ -734,6 +937,20 @@ class MainActivity : AppCompatActivity() {
 
         // 桌面小组件：同步连接状态（内部做了「状态没变不刷新」的判断）
         WidgetState.setConnected(this, state == TransferManager.State.CONNECTED)
+
+        // 从别的应用分享进来的文件：当时没连接就先存着，连上后自动排队发送
+        if (state == TransferManager.State.CONNECTED && pendingShareUris.isNotEmpty()) {
+            val uris = pendingShareUris
+            pendingShareUris = emptyList()
+            log("连接建立，开始发送先前分享进来的 ${uris.size} 个文件")
+            enqueueFiles(uris)
+        }
+
+        // 连接失败时告诉用户还有一条路可走，只提示一次，免得反复刷屏
+        if (state == TransferManager.State.ERROR && !p2pHintShown) {
+            p2pHintShown = true
+            log(getString(R.string.p2p_failed_hint))
+        }
     }
 
     private fun renderChat() {
@@ -762,66 +979,92 @@ class MainActivity : AppCompatActivity() {
     // ------------------------------------------------------------------ 文件传输
 
     private fun pickFile() {
+        // 多选：一次挑十个文件也不用点十次，队列会自动一个个发
         pickFileLauncher.launch(arrayOf("*/*"))
     }
 
-    private fun resolveFileInfo(uri: Uri) {
-        val name: String
-        val size: Long
-        try {
-            contentResolver.query(
-                uri,
-                arrayOf(
-                    android.provider.OpenableColumns.DISPLAY_NAME,
-                    android.provider.OpenableColumns.SIZE
-                ),
-                null, null, null
-            )?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                    val sizeIdx = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
-                    name = if (nameIdx >= 0) cursor.getString(nameIdx) else "未命名"
-                    size = if (sizeIdx >= 0) cursor.getLong(sizeIdx) else -1L
-                    pendingUri = uri
-                    pendingName = name
-                    pendingSize = size
-                    log("已选择：$name（$size 字节）")
-                    startSend()
-                    return
-                }
-            }
-        } catch (e: Exception) {
-            log("读取文件信息失败：${e.message}")
-        }
-        toast(getString(R.string.transfer_pick))
-    }
-
-    private fun startSend() {
+    /**
+     * 把选中的文件排进发送队列。
+     *
+     * 读名字和大小放在这里做（而不是逐个在发送时读），是为了让队列一开始就知道
+     * 每一项要发多大——界面上「第 2/5 个」这样的提示才有意义。
+     */
+    private fun enqueueFiles(uris: List<Uri>) {
         if (!TransferManager.isConnected) {
             toast(getString(R.string.channel_not_ready))
             return
         }
-        val uri = pendingUri ?: return
-
-        // 传“流工厂”：发送端要先算 MD5 再重新打开流发数据，
-        // 只传一个流会导致 MD5 读完就 EOF，实际发出 0 字节。
-        val ok = TransferManager.sendFile(
-            openStream = { runCatching { contentResolver.openInputStream(uri) }.getOrNull() },
-            fileName = pendingName,
-            fileSize = pendingSize
-        )
-        if (!ok) {
+        val items = uris.map { uri ->
+            val (name, size) = queryFileInfo(uri)
+            SendItem(uri, name, size)
+        }
+        val queued = sendQueue.enqueue(items)
+        if (queued == 0) {
             toast(getString(R.string.transfer_busy))
             return
         }
+        log("已加入发送队列：$queued 个文件")
+        if (queued > 1) toast(getString(R.string.send_queue_added, queued))
+        updateCancelButton()
+    }
 
-        // Q 版人物：传输开始提醒
-        mascot.showTransferring()
+    /**
+     * 处理从别的应用「分享」进来的文件。
+     *
+     * 直接分享时大概率还没连接（用户是从相册点分享过来的）。这时先把 Uri 记住，
+     * 等通道建立后自动排队发送——比弹一句「请先连接再重新分享」体验好得多。
+     */
+    private fun handleShareIntent(intent: Intent?) {
+        if (intent == null) return
+        val uris: List<Uri> = when (intent.action) {
+            Intent.ACTION_SEND -> listOfNotNull(
+                @Suppress("DEPRECATION")
+                (intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri)
+            )
 
-        // 传输已经开始跑，这里只决定要不要弹游戏窗口。
-        // 先问一句「要玩吗」，用户选不玩就不再打扰；已经选过不玩的直接跳过。
-        if (gamePromptDisabled) return
-        askToPlayGame(pendingName)
+            Intent.ACTION_SEND_MULTIPLE -> {
+                @Suppress("DEPRECATION")
+                intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
+            }
+
+            else -> emptyList()
+        }
+        if (uris.isEmpty()) return
+
+        if (TransferManager.isConnected) {
+            enqueueFiles(uris)
+        } else {
+            pendingShareUris = uris
+            toast(getString(R.string.share_waiting_connect, uris.size))
+            log("收到 ${uris.size} 个分享文件，等待连接后发送")
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleShareIntent(intent)
+    }
+
+    /** 读 SAF 的文件名与大小；拿不到时给一个能跑通的默认值 */
+    private fun queryFileInfo(uri: Uri): Pair<String, Long> {
+        var name = getString(R.string.transfer_unknown_file)
+        var size = -1L
+        runCatching {
+            contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+                null, null, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (nameIdx >= 0) cursor.getString(nameIdx)?.let { name = it }
+                    if (sizeIdx >= 0) size = cursor.getLong(sizeIdx)
+                }
+            }
+        }.onFailure { log("读取文件信息失败：${it.message}") }
+        return name to size
     }
 
     /**
@@ -831,7 +1074,7 @@ class MainActivity : AppCompatActivity() {
      * （主界面的「玩游戏」按钮随时可以自己玩；长按它可恢复这个询问）。
      */
     private fun askToPlayGame(fileName: String) {
-        AlertDialog.Builder(this)
+        AppDialog.builder(this)
             .setTitle(R.string.game_ask_title)
             .setMessage(R.string.game_ask_message)
             .setPositiveButton(R.string.game_ask_play) { _, _ ->
@@ -892,7 +1135,7 @@ class MainActivity : AppCompatActivity() {
         game.showIdle()
     }
 
-    private fun renderReceiveProgress(progress: Float) {
+    private fun renderReceiveProgress(progress: Float, speed: Long) {
         val percent = (progress * 100).toInt()
         pbTransfer.progress = percent
         // transfer_receiving 需要两个参数（文件名 + 百分比），缺一就会抛
@@ -900,7 +1143,12 @@ class MainActivity : AppCompatActivity() {
         val name = TransferManager.receivingFileName.ifBlank {
             getString(R.string.transfer_unknown_file)
         }
-        tvTransferState.text = getString(R.string.transfer_receiving, name, percent)
+        val suffix = speedSuffix(speed, TransferManager.receivingTotalBytes, progress)
+        tvTransferState.text = if (suffix.isEmpty()) {
+            getString(R.string.transfer_receiving, name, percent)
+        } else {
+            getString(R.string.transfer_receiving_speed, name, percent, suffix)
+        }
     }
 
     private fun renderReceiveDone(path: String?) {
@@ -912,19 +1160,57 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun renderSendProgress(progress: Float) {
+    private fun renderSendProgress(progress: Float, speed: Long) {
         val percent = (progress * 100).toInt()
         pbTransfer.progress = percent
-        tvTransferState.text = getString(R.string.transfer_sending, pendingName, percent)
+        val suffix = speedSuffix(speed, TransferManager.sendingTotalBytes, progress)
+        tvTransferState.text = if (suffix.isEmpty()) {
+            getString(R.string.transfer_sending, pendingName, percent)
+        } else {
+            getString(R.string.transfer_sending_speed, pendingName, percent, suffix)
+        }
+        updateCancelButton()
+    }
+
+    /**
+     * 「2.4 MB/s · 剩 8 秒」这样的后缀。
+     *
+     * 速度还没采到样本、或者总量未知（SAF 不给 SIZE）时返回空串，
+     * 调用方就退回不带速度的文案，而不是显示 `-- /s` 这种废信息。
+     */
+    private fun speedSuffix(speed: Long, totalBytes: Long, progress: Float): String {
+        if (speed <= 0L) return ""
+        val remaining = (totalBytes * (1f - progress.coerceIn(0f, 1f))).toLong()
+        return if (remaining > 0L && totalBytes > 0L) {
+            getString(
+                R.string.transfer_speed_eta,
+                Formatters.speed(speed),
+                Formatters.duration(remaining / speed)
+            )
+        } else {
+            getString(R.string.transfer_speed_only, Formatters.speed(speed))
+        }
     }
 
     private fun renderSendDone(ok: Boolean) {
         pbTransfer.progress = 0
-        if (ok) {
-            tvTransferState.text = getString(R.string.transfer_sent_done, pendingName)
-        } else {
-            tvTransferState.text = getString(R.string.transfer_sent_fail)
+        when {
+            // 用户自己点的取消不算失败，文案要区分开
+            userCancelled -> {
+                userCancelled = false
+                tvTransferState.text = getString(R.string.transfer_cancelled)
+            }
+
+            ok -> tvTransferState.text = getString(R.string.transfer_sent_done, pendingName)
+            else -> tvTransferState.text = getString(R.string.transfer_sent_fail)
         }
+        updateCancelButton()
+    }
+
+    /** 「取消」只在真的有事可取消时出现，平时不占地方 */
+    private fun updateCancelButton() {
+        val active = TransferManager.isSending || sendQueue.pendingCount > 0
+        btnCancelTransfer.visibility = if (active) View.VISIBLE else View.GONE
     }
 
     // ------------------------------------------------------------------ 工具
@@ -940,6 +1226,67 @@ class MainActivity : AppCompatActivity() {
         logLines.addLast("${LocalTime.now().format(timeFormatter)}  $message")
         while (logLines.size > MAX_LOG_LINES) logLines.removeFirst()
         tvLog.text = logLines.joinToString("\n")
+    }
+
+    // ------------------------------------------------------------------ 日志导出
+
+    private fun showLogMenu() {
+        AppDialog.builder(this)
+            .setItems(
+                arrayOf(getString(R.string.log_export), getString(R.string.log_clear))
+            ) { _, which ->
+                if (which == 0) exportLog() else {
+                    logLines.clear()
+                    tvLog.text = ""
+                }
+            }
+            .show()
+    }
+
+    /**
+     * 把日志写成文件再调系统分享。
+     *
+     * 真机上出问题时用户往往没法连 adb，这个入口让「把日志发给我」变成一次点击。
+     * 文件走 FileProvider 授权，不是把 file:// 直接塞进 Intent（API 24 起那样会崩）。
+     */
+    private fun exportLog() {
+        val content = buildString {
+            appendLine("WiFi 快传 诊断日志")
+            appendLine("导出时间：${LocalDateTime.now()}")
+            appendLine(
+                "设备：${Build.MANUFACTURER} ${Build.MODEL} / " +
+                    "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
+            )
+            appendLine("连接状态：" + if (TransferManager.isConnected) "已连接" else "未连接")
+            appendLine("角色：" + tvRoleInfo.text)
+            appendLine("通道：" + tvChannelState.text)
+            appendLine("---- 运行日志 ----")
+            logLines.forEach { appendLine(it) }
+        }
+
+        val file = runCatching {
+            val dir = File(filesDir, "logs").apply { mkdirs() }
+            val name = "log-${SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())}.txt"
+            File(dir, name).apply { writeText(content) }
+        }.getOrNull()
+
+        if (file == null) {
+            toast(getString(R.string.log_export_failed))
+            return
+        }
+
+        runCatching {
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            val share = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, "WiFi 快传日志")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(share, getString(R.string.log_export)))
+        }.onFailure {
+            toast(getString(R.string.log_export_failed))
+        }
     }
 
     private companion object {

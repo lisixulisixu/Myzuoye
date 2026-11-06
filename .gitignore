@@ -13,3 +13,11 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Release 签名（密钥与密码不能进仓库）
+keystore.properties
+*.keystore
+*.jks
+
+# IDE
+/.idea/

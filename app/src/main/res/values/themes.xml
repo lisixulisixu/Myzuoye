@@ -1,10 +1,68 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
+    <!--
+      整体是深色夜空风格，所以即使系统处于浅色模式也保持深色 UI：
+      背景是深色流动渐变，文字必须是浅色，否则读不清。
+      values-night 里只做「更暗一档」的微调。
+    -->
     <style name="Base.Theme.Myzuoye" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/primary</item>
         <item name="colorSecondary">@color/primary_light</item>
         <item name="android:windowBackground">@color/bg_grad_top</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        <item name="android:textColorHint">@color/text_secondary</item>
+
+        <!-- Material 组件（对话框、菜单、Toast 背景）统一用深色表面 -->
+        <item name="colorSurface">@color/surface</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="colorSurfaceVariant">@color/surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/text_secondary</item>
+        <item name="android:colorBackground">@color/bg_grad_top</item>
+        <item name="colorAccent">@color/primary_light</item>
+
+        <!-- 状态栏/导航栏透明，让流动背景铺满整屏 -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+
+        <!-- 对话框统一深色 -->
+        <item name="alertDialogTheme">@style/ThemeOverlay.Myzuoye.Dialog</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.Myzuoye.Dialog</item>
     </style>
 
     <style name="Theme.Myzuoye" parent="Base.Theme.Myzuoye" />
+
+    <!--
+      对话框单独给一套深色表面。
+      AlertDialog 走的是 ThemeOverlay，不会继承 Activity 主题里的 colorSurface，
+      不覆盖的话深色界面上会突然弹出一块白底，非常跳。
+      两个属性都设：AppCompat 的 AlertDialog 读 alertDialogTheme，Material3 读 materialAlertDialogTheme。
+    -->
+    <style name="ThemeOverlay.Myzuoye.Dialog" parent="ThemeOverlay.Material3.Dialog.Alert">
+        <item name="colorSurface">@color/surface</item>
+        <item name="colorSurfaceVariant">@color/surface_variant</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="colorOnSurfaceVariant">@color/text_secondary</item>
+        <item name="colorPrimary">@color/primary_light</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        <item name="android:windowBackground">@drawable/bg_dialog</item>
+        <item name="android:colorBackground">@color/surface</item>
+    </style>
+
+    <!-- 已收文件页的筛选 chip -->
+    <style name="FileFilterChip">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginEnd">8dp</item>
+        <item name="android:background">@drawable/bg_chip</item>
+        <item name="android:paddingStart">14dp</item>
+        <item name="android:paddingEnd">14dp</item>
+        <item name="android:paddingTop">6dp</item>
+        <item name="android:paddingBottom">6dp</item>
+        <item name="android:textColor">@color/chip_text</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+    </style>
 </resources>

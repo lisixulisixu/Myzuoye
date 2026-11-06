@@ -3,14 +3,43 @@
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
 
-    <!-- 主题色：清新的青蓝色，用于按钮和强调 -->
-    <color name="primary">#2E7BD6</color>
-    <color name="primary_dark">#1E5AA8</color>
-    <color name="primary_light">#5A9BE8</color>
+    <!-- 主题色：夜空蓝，按钮与强调色 -->
+    <color name="primary">#3B82F6</color>
+    <color name="primary_dark">#2563EB</color>
+    <color name="primary_light">#60A5FA</color>
 
-    <!-- 背景渐变端点 -->
-    <color name="bg_grad_top">#E8F0FB</color>
-    <color name="bg_grad_bottom">#F5F1E8</color>
-    <color name="bg_accent_1">#D6E7FB</color>
-    <color name="bg_accent_2">#FBE4D6</color>
+    <!-- 背景渐变端点（整体是深色夜间风格） -->
+    <color name="bg_grad_top">#0A101C</color>
+    <color name="bg_grad_bottom">#12182A</color>
+    <color name="bg_accent_1">#16203A</color>
+    <color name="bg_accent_2">#241A33</color>
+
+    <!--
+      流动背景的四段渐变。
+      颜色比之前深得多：底色接近墨蓝，中间插一段紫，末尾带一点青，
+      这样光斑漂过去的时候色相会跟着变，不会像纯色背景那样呆板。
+    -->
+    <color name="flow_bg_1">#070C16</color>
+    <color name="flow_bg_2">#0E1526</color>
+    <color name="flow_bg_3">#171033</color>
+    <color name="flow_bg_4">#08161F</color>
+
+    <!-- 光斑：蓝 / 紫 / 青 / 粉，带透明度的饱和色，叠加后形成渐变流动感 -->
+    <color name="flow_glow_1">#7A4F8BFF</color>
+    <color name="flow_glow_2">#6E9B6BFF</color>
+    <color name="flow_glow_3">#5E22D3EE</color>
+    <color name="flow_glow_4">#4DF472B6</color>
+
+    <!-- 正文文字色（深色背景必须用浅色字） -->
+    <color name="text_primary">#EDF2FF</color>
+    <color name="text_secondary">#9FB0CC</color>
+
+    <!-- 面板与描边 -->
+    <color name="panel_fill">#33FFFFFF</color>
+    <color name="panel_stroke">#33FFFFFF</color>
+
+    <!-- 对话框等 Material 组件用的表面色（深色 UI，浅色模式下也保持一致） -->
+    <color name="surface">#141B2B</color>
+    <color name="surface_variant">#1E2739</color>
+    <color name="surface_stroke">#33FFFFFF</color>
 </resources>

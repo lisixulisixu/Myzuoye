@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  传输进度条：细轨道 + 青蓝紫渐变。
+  渐变让进度条在深色背景上是"发光的一条线"，比系统默认的纯色条更贴合整体风格。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@android:id/background">
+        <shape android:shape="rectangle">
+            <solid android:color="#26FFFFFF" />
+            <corners android:radius="6dp" />
+        </shape>
+    </item>
+    <item android:id="@android:id/progress">
+        <clip>
+            <shape android:shape="rectangle">
+                <gradient
+                    android:angle="0"
+                    android:centerColor="#3B82F6"
+                    android:endColor="#A78BFA"
+                    android:startColor="#22D3EE" />
+                <corners android:radius="6dp" />
+            </shape>
+        </clip>
+    </item>
+</layer-list>

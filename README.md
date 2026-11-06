@@ -9,6 +9,7 @@ Android Wi-Fi Direct（P2P）点对点文件传输。
 - M3 ✅ 单向文件传输：选择文件 → 文件头（文件名/大小/MD5）→ 8KB 分片 → 落盘 + 进度 + MD5 校验
 - M4 ✅ 前台服务保活：传输期间通知栏进度，切后台/锁屏不中断
 - 附加 ✅ 应用内查看已接收文件、封面特效、传输期间的小游戏、带天气特效的桌面小组件
+- M7 ✅ 断点续传、多选队列、实时速度、局域网兜底、深色流动界面、Release 构建与 CI
 
 ## 功能速览
 
@@ -19,16 +20,41 @@ Android Wi-Fi Direct（P2P）点对点文件传输。
 - **传输小游戏**：发送前询问是否要玩，玩则弹出跑酷小游戏；也可点「玩游戏」随时玩（见下文）
 - **桌面小组件**：按定位显示当地温度与天气，并按天气画太阳/月亮/云/雨雪/雷电特效；
   同时显示连接状态与已接收文件数，点按直达应用（见下文）
+- **传输体验**：多选文件排队发送、实时速度与剩余时间、可随时取消、**8MB 以上文件支持断点续传**
+- **局域网兜底**：Wi-Fi Direct 被 ROM 限制时可改用「同一 Wi-Fi 输入对方 IP」直连（见下文）
+- **界面**：深色流动背景（多段渐变 + 极光光带 + 漂浮光点），支持系统深色模式
 
 ## 安装包
 
 直接下载安装（Android 7.0 及以上，`minSdk 24`）：
 
-- 仓库内：[`apk/WiFi快传-debug.apk`](apk/WiFi快传-debug.apk) —— 点右上角 Download 即可
-- 本地：`WiFi快传-debug.apk`（构建产物同步副本）
+- 仓库内：[`apk/WiFi快传-release.apk`](apk/WiFi快传-release.apk) —— 点右上角 Download 即可
+- 本地：`WiFi快传-1.1-release.apk`（构建产物同步副本）
 
-安装时如提示「未知来源」，在系统设置里允许该来源安装即可。这是 debug 包，未做 release 签名，
-仅用于自测和演示。
+安装时如提示「未知来源」，在系统设置里允许该来源安装即可。这是用本仓库 `release.keystore` 签名的正式包（R8 压缩后约 2.7MB），可直接安装。
+
+## 构建
+
+```bash
+./gradlew :app:assembleDebug     # 调试包
+./gradlew :app:assembleRelease   # 发布包（R8 + 资源压缩，约 2.7MB）
+./gradlew :app:testDebugUnitTest # 纯 JVM 单测，不需要模拟器
+```
+
+Release 签名信息从项目根目录的 `keystore.properties` 读取（**已在 .gitignore 里，不要提交**）：
+
+```properties
+storeFile=release.keystore
+storePassword=***
+keyAlias=wifitransfer
+keyPassword=***
+```
+
+文件不存在时会退化成未签名构建，别人 clone 下来也能直接编译。
+`proguard-rules.pro` 里必须保留自定义 View（`MascotView`、`FlowBackgroundView` 等）——
+它们在 XML 里以全限定名出现，由 LayoutInflater 反射创建，不 keep 会在 release 包里白屏。
+
+CI：`.github/workflows/android.yml` 在每次 push / PR 时跑单测 + 编译 debug 包。
 
 ## 环境
 
@@ -56,6 +82,11 @@ Android Wi-Fi Direct（P2P）点对点文件传输。
 | `app/src/main/java/com/example/myzuoye/ui/ReceivedFileAdapter.kt` | 已收文件列表适配器 |
 | `app/src/main/java/com/example/myzuoye/widget/TransferWidgetProvider.kt` | 桌面小组件：渲染天气/状态、点击进入应用 |
 | `app/src/main/java/com/example/myzuoye/widget/WeatherSceneRenderer.kt` | 离屏绘制小组件的天气背景与天体图层 |
+| `app/src/main/java/com/example/myzuoye/transfer/SendQueue.kt` | 多选文件的发送队列（顺序发送、断连收敛） |
+| `app/src/main/java/com/example/myzuoye/transfer/PartialStore.kt` | 大文件半成品存储，断点续传的基础 |
+| `app/src/main/java/com/example/myzuoye/net/LanAddress.kt` | 枚举本机局域网 IPv4，局域网直连用 |
+| `app/src/main/java/com/example/myzuoye/ui/AppDialog.kt` | 统一的深色对话框 |
+| `app/src/main/java/com/example/myzuoye/util/Formatters.kt` | 容量 / 速度 / 时长的统一格式化 |
 | `app/src/main/java/com/example/myzuoye/weather/WeatherRepository.kt` | 定位 → Open-Meteo 天气 → 城市反查 → 落盘 + 刷新小组件 |
 | `app/src/main/java/com/example/myzuoye/weather/WeatherCondition.kt` | WMO 天气代码 → 天气分类 / 中文短名 |
 | `app/src/main/java/com/example/myzuoye/widget/WidgetState.kt` | 小组件状态快照（SharedPreferences），供跨进程读取 |
@@ -76,20 +107,34 @@ P2P 组网完成后自动建立：组主（`192.168.49.1`）作服务端监听 `
 
 ## 文件传输（M3）
 
-帧类型：
+- **保存位置**：`下载/WiFi直传/`，重名自动加 `(1)(2)`，校验通过前用 `IS_PENDING` 隐藏
+- **分片 64KB**：每帧一次 flush，分片太小系统调用开销占比高；64KB 在本机链路上吞吐最好
+- **只读一遍**：文件头先写 MD5 占位符，边读边算 digest，算出的 MD5 放进结束帧回传核对。
+  早期实现是「先整读一遍算 MD5、再读一遍发送」，1GB 文件等于读两次、慢一倍
+- **实时速度**：400ms 滑动平均 + 80ms 节流回调，界面显示 `12.4 MB/s · 剩 48 秒`
+- **多选队列**：一次选多个文件按顺序发；断连时清空队列并如实回报成功/失败数
+- **取消**：发送中可取消，会给对端发 `TYPE_FILE_CANCEL`，对端不会一直卡在「接收中」
 
-| type | 含义 | payload |
-| --- | --- | --- |
-| `0x01` | 文本 | UTF-8 字符串 |
-| `0x02` | 文件头 | 版本(1) + 文件名长度(2) + 文件名 + 大小(8) + MD5(32) |
-| `0x03` | 分片 | 原始文件字节（8KB） |
-| `0x04` | 结束 | 已发送字节总数(long) |
-| `0x05` | 取消 | 空 |
+### 断点续传（协议版本 2）
 
-发送方用系统文件选择器（SAF）选文件，先算 MD5 再逐片发送；接收方落盘到系统「下载/WiFi直传」
-目录（Android 10+ 走 MediaStore，9 及以下写外部存储 Download），重名自动加 `(1)`、`(2)` 不覆盖。
-接收时边收边算 MD5，结束后核对大小与 MD5，不一致则删除（MediaStore 的 IS_PENDING 保证
-半截文件不会露出来）。当前为单向发送，双向/多文件待后续迭代。
+8MB 以上的文件先写到应用专属目录的半成品（`Android/data/<包名>/files/partial`），
+收完再复制进下载目录；失败或断连时半成品保留，下次同名同大小再传时：
+
+1. 接收端在文件头之后回一个 `TYPE_FILE_RESUME`，内容是「我已经有 N 字节」
+2. 发送端读取文件时，断点之前的部分只算 MD5、不发送，之后继续发
+3. 接收端把已落盘的 N 字节重新喂给 digest，保证最终 MD5 仍覆盖整份文件
+
+几个刻意的设计：
+
+- **版本协商**：只有文件头版本 ≥ 2 才会回续传应答。老客户端（版本 0）不会等这个帧，
+  给它发反而会导致「它从头发、这边从中间追加」把文件写坏
+- **超时兜底**：发送端最多等 600ms，等不到就从头传，绝不因为对端没应答卡死
+- **校验优先**：MD5 对不上就丢弃半成品，宁可重传也不留坏文件
+- **自动清理**：半成品超过 7 天在下次启动时清掉
+
+已知限制：半成品的 key 是「文件名 + 字节数」，两台不同设备发同名同大小的不同文件
+会共用同一个半成品；这种情况最后 MD5 校验一定失败、半成品被丢弃，不会产生坏文件，
+只是会多传一次。
 
 ## 前台服务保活（M4）
 
@@ -133,10 +178,33 @@ adb -s emulator-5556 shell md5sum /sdcard/Pictures/xxx.jpg
 adb -s emulator-5554 shell md5sum "/sdcard/Download/WiFi直传/xxx.jpg"
 ```
 
+## 局域网直连（Wi-Fi Direct 的兜底通道）
+
+国产 ROM 对 Wi-Fi Direct 限制很重（搜不到、建组失败、连上分不到 192.168.49.x 地址）。
+这时两台设备连同一个 Wi-Fi，用局域网直连即可——走的还是同一套 TCP + 帧协议，
+文本、文件、断点续传全都照旧可用。
+
+**长按「文本通道」这一行** → 选「局域网直连（同一 Wi-Fi）」：
+
+- 对话框会显示本机地址（如 `192.168.1.23:8988`）
+- 一台点「作为服务端监听」，另一台在输入框填对方地址后点「连接」
+- 不需要 Wi-Fi Direct 权限，只要两台在同一个网段（路由器开了 AP 隔离则不行）
+
 ## 应用内查看已接收文件
 
-接收的文件保存在系统「下载/WiFi直传」目录，主界面点「已收文件」进入列表页，按时间倒序展示，
-点击任意文件用系统应用打开（图片进图库、文档进 WPS 等）。文件管理器、相册、微信也能直接看到该目录。
+主界面「已收文件」进入，列表支持：
+
+- **缩略图**：图片与视频显示封面（`contentResolver.loadThumbnail`，API 29 以下自己算采样率），
+  其他类型保持纯色块；贴图前校验 ViewHolder 的 tag，避免列表滑动时把图贴到错的
+- **类型筛选**：全部 / 图片 / 视频 / 文档 / 其他
+- **分享**：调系统分享面板发给别的应用
+- **删除**：二次确认后删除（本应用创建的 MediaStore 条目无需额外权限）
+- 点整行用系统应用打开
+
+## 日志导出
+
+**长按底部日志区** →「导出日志」。会把设备型号、系统版本、连接状态与最近 200 条日志
+写成 txt，走 FileProvider 分享出来。真机出问题时不用连电脑，一次点击就能把日志发出来。
 
 ## Q 版人物
 

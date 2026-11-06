@@ -38,12 +38,28 @@
     <string name="transfer_pick">请选择要发送的文件</string>
     <string name="transfer_sending">正在发送：%1$s（%2$d%%）</string>
     <string name="transfer_receiving">正在接收：%1$s（%2$d%%）</string>
+    <string name="transfer_sending_speed">正在发送：%1$s（%2$d%%）· %3$s</string>
+    <string name="transfer_receiving_speed">正在接收：%1$s（%2$d%%）· %3$s</string>
+    <string name="transfer_speed_only">%1$s</string>
+    <string name="transfer_speed_eta">%1$s · 剩 %2$s</string>
     <string name="transfer_sent_done">已发送：%1$s</string>
     <string name="transfer_sent_fail">发送失败</string>
     <string name="transfer_received_done">已保存到：%1$s</string>
     <string name="transfer_received_fail">接收失败或校验未通过</string>
     <string name="transfer_busy">已有文件在传输，请稍候</string>
     <string name="transfer_unknown_file">文件</string>
+    <string name="send_queue_added">已加入队列：%1$d 个文件，正在依次发送</string>
+    <string name="send_queue_next">已开始发送下一个，队列还剩 %1$d 个</string>
+    <string name="send_queue_all_done">全部发送完成，共 %1$d 个文件</string>
+    <string name="send_queue_partial">发送结束：成功 %1$d 个，失败 %2$d 个</string>
+    <string name="transfer_cancel">取消</string>
+    <string name="transfer_cancelled">已取消传输</string>
+    <string name="queue_cleared">已清空发送队列</string>
+    <string name="share_waiting_connect">已收到 %1$d 个文件，连接设备后会自动发送</string>
+    <string name="log_export">导出日志</string>
+    <string name="log_clear">清空日志</string>
+    <string name="log_export_done">日志已导出</string>
+    <string name="log_export_failed">日志导出失败</string>
 
     <string name="dialog_permission_title">需要“附近设备”权限</string>
     <string name="dialog_permission_message">搜索和连接附近设备依赖“附近设备”权限，请到系统设置中手动开启后返回本页。</string>
@@ -55,9 +71,20 @@
     <string name="notif_idle">连接空闲</string>
 
     <!-- 文本通道调试入口（长按通道状态触发） -->
-    <string name="channel_debug_title">文本通道（调试）</string>
+    <string name="channel_debug_title">连接方式（文本通道）</string>
     <string name="channel_debug_connect">手动连接</string>
     <string name="channel_debug_host_hint">host:port，如 10.0.2.2:8988</string>
+    <string name="lan_direct">局域网直连（同一 Wi-Fi）</string>
+    <string name="lan_dialog_title">局域网直连</string>
+    <string name="lan_local_addr">本机地址：%1$s</string>
+    <string name="lan_hint_body">两台设备连同一个 Wi-Fi。一台点「作为服务端监听」，另一台在上面填它的地址。</string>
+    <string name="lan_peer_hint">对方地址，如 192.168.1.23:8988</string>
+    <string name="lan_connect">连接</string>
+    <string name="lan_listen">作为服务端监听</string>
+    <string name="lan_no_ip">当前没有局域网地址，请先连接 Wi-Fi</string>
+    <string name="lan_listen_started">已在 %1$s 监听</string>
+    <string name="p2p_failed_hint">Wi-Fi Direct 连接失败，可长按「文本通道」改用局域网直连</string>
+    <string name="devices_empty_hint">还没有发现设备\n让另一台手机也打开本应用并点「搜索设备」\n连不上时可长按「文本通道」改用局域网直连</string>
 
     <!-- 应用内查看已接收文件 -->
     <string name="action_view_files">已收文件</string>
@@ -66,6 +93,20 @@
     <string name="files_empty">还没有接收到任何文件\n连接后收到的文件会出现在这里</string>
     <string name="files_open">打开</string>
     <string name="files_no_app">没有能打开此文件类型的应用</string>
+    <string name="files_share">分享</string>
+    <string name="files_share_chooser">分享到</string>
+    <string name="files_delete">删除</string>
+    <string name="files_delete_title">删除文件</string>
+    <string name="files_delete_message">确定删除「%1$s」？删除后无法恢复。</string>
+    <string name="files_deleted">已删除</string>
+    <string name="files_delete_failed">删除失败</string>
+    <string name="files_empty_filter">这个分类下还没有文件</string>
+    <string name="files_filter_all">全部</string>
+    <string name="files_filter_image">图片</string>
+    <string name="files_filter_video">视频</string>
+    <string name="files_filter_doc">文档</string>
+    <string name="files_filter_other">其他</string>
+    <string name="cancel">取消</string>
 
     <!-- 传输小游戏 -->
     <string name="game_title">传输进行中，玩个小游戏吧</string>

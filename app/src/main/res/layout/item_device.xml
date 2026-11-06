@@ -23,6 +23,7 @@
             android:layout_height="wrap_content"
             android:ellipsize="end"
             android:maxLines="1"
+            android:textColor="@color/text_primary"
             android:textSize="15sp" />
 
         <TextView
@@ -31,6 +32,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
             android:fontFamily="monospace"
+            android:textColor="@color/text_secondary"
             android:textSize="12sp" />
     </LinearLayout>
 
@@ -39,6 +41,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginStart="12dp"
+        android:textColor="@color/primary_light"
         android:textSize="12sp" />
 
 </LinearLayout>

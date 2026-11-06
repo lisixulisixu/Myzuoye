@@ -59,7 +59,8 @@
                 android:layout_height="wrap_content"
                 android:text="@string/p2p_state_init"
                 android:textSize="16sp"
-                android:textStyle="bold" />
+                android:textStyle="bold" 
+            android:textColor="@color/text_primary"/>
 
             <TextView
                 android:id="@+id/tvSelfInfo"
@@ -67,7 +68,8 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="5dp"
                 android:text="@string/self_unknown"
-                android:textSize="12sp" />
+                android:textSize="12sp" 
+            android:textColor="@color/text_secondary"/>
 
             <TextView
                 android:id="@+id/tvRoleInfo"
@@ -75,7 +77,8 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:text="@string/role_unknown"
-                android:textSize="12sp" />
+                android:textSize="12sp" 
+            android:textColor="@color/text_secondary"/>
         </LinearLayout>
 
         <LinearLayout
@@ -142,7 +145,7 @@
                 android:minHeight="40dp"
                 android:paddingHorizontal="4dp"
                 android:text="@string/game_play"
-                android:textColor="@color/primary_dark"
+                android:textColor="@color/primary_light"
                 android:textSize="13sp" />
         </LinearLayout>
 
@@ -154,17 +157,38 @@
             android:paddingTop="10dp"
             android:paddingBottom="2dp"
             android:text="@string/nearby_devices_zero"
-            android:textSize="12sp" />
+            android:textSize="12sp" 
+            android:textColor="@color/text_secondary"/>
 
-        <androidx.recyclerview.widget.RecyclerView
-            android:id="@+id/rvDevices"
+        <!-- 设备列表 + 空状态提示。
+             列表为空时这块区域原本是一大片纯背景，看起来像"页面没加载出来"，
+             给一句引导文案既填补了视觉空白，也告诉用户下一步该干什么。 -->
+        <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_marginHorizontal="8dp"
-            android:layout_weight="1"
-            android:clipToPadding="false"
-            android:minHeight="72dp"
-            android:scrollbars="vertical" />
+            android:layout_weight="1">
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rvDevices"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:layout_marginHorizontal="8dp"
+                android:clipToPadding="false"
+                android:minHeight="72dp"
+                android:scrollbars="vertical" />
+
+            <TextView
+                android:id="@+id/tvDevicesEmpty"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:gravity="center"
+                android:lineSpacingExtra="4dp"
+                android:paddingHorizontal="32dp"
+                android:text="@string/devices_empty_hint"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+        </FrameLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -172,6 +196,7 @@
             android:layout_marginHorizontal="12dp"
             android:layout_marginTop="4dp"
             android:background="@drawable/bg_panel"
+            android:elevation="4dp"
             android:orientation="vertical"
             android:padding="12dp">
 
@@ -181,7 +206,8 @@
                 android:layout_height="wrap_content"
                 android:text="@string/channel_idle"
                 android:textSize="13sp"
-                android:textStyle="bold" />
+                android:textStyle="bold" 
+            android:textColor="@color/text_primary"/>
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -212,27 +238,50 @@
                     android:insetBottom="0dp"
                     android:minHeight="40dp"
                     android:text="@string/action_view_files"
-                    android:textColor="@color/primary_dark"
+                    android:textColor="@color/primary_light"
                     android:textSize="13sp" />
 
                 <ProgressBar
                     android:id="@+id/pbTransfer"
                     style="?android:attr/progressBarStyleHorizontal"
                     android:layout_width="0dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="6dp"
                     android:layout_marginStart="10dp"
                     android:layout_weight="1"
                     android:max="100"
-                    android:progress="0" />
+                    android:progress="0"
+                    android:progressDrawable="@drawable/bg_progress" />
             </LinearLayout>
 
-            <TextView
-                android:id="@+id/tvTransferState"
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:text="@string/transfer_idle"
-                android:textSize="11sp" />
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/tvTransferState"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/transfer_idle"
+                    android:textSize="11sp" 
+            android:textColor="@color/text_secondary"/>
+
+                <!-- 传输中或队列有货时才出现：一键取消当前发送并清空队列 -->
+                <TextView
+                    android:id="@+id/btnCancelTransfer"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="?attr/selectableItemBackground"
+                    android:paddingHorizontal="8dp"
+                    android:paddingVertical="4dp"
+                    android:text="@string/transfer_cancel"
+                    android:textColor="#E06C75"
+                    android:textSize="11sp"
+                    android:visibility="gone" />
+            </LinearLayout>
 
             <ScrollView
                 android:id="@+id/svChat"
@@ -246,7 +295,8 @@
                     android:layout_height="wrap_content"
                     android:lineSpacingExtra="2dp"
                     android:text="@string/chat_empty"
-                    android:textSize="12sp" />
+                    android:textSize="12sp" 
+            android:textColor="@color/text_primary"/>
             </ScrollView>
 
             <LinearLayout
@@ -266,6 +316,8 @@
                     android:inputType="text"
                     android:maxLines="1"
                     android:minHeight="40dp"
+                    android:textColor="@color/text_primary"
+                    android:textColorHint="@color/text_secondary"
                     android:textSize="13sp" />
 
                 <Button
@@ -295,6 +347,7 @@
             android:fontFamily="monospace"
             android:gravity="bottom"
             android:padding="8dp"
+            android:textColor="@color/text_secondary"
             android:textSize="11sp" />
 
     </LinearLayout>

@@ -88,6 +88,53 @@ class MascotView @JvmOverloads constructor(
         loadBitmap()
     }
 
+    /** 呼吸动画是否在跑，避免重复启动 */
+    private var floatAnimator = false
+
+    /**
+     * 待机时轻轻上下浮动，像在呼吸。
+     *
+     * 幅度只有 3dp：动得太多会让人分心，也太像「广告条」。
+     * 动画挂在 ViewPropertyAnimator 上，系统关掉动画时会自动不生效。
+     * 气泡和人物在同一个 View 里，跟着一起浮动，反而更像角色在说话。
+     */
+    private fun startIdleFloat() {
+        if (floatAnimator != null) return
+        val dy = 3f * resources.displayMetrics.density
+        animate().translationY(-dy)
+            .setDuration(1600L)
+            .setInterpolator(android.view.animation.AccelerateDecelerateInterpolator())
+            .withEndAction { floatDown(dy) }
+            .start()
+        floatAnimator = true
+    }
+
+    private fun floatDown(dy: Float) {
+        if (!floatAnimator) return
+        animate().translationY(0f)
+            .setDuration(1600L)
+            .setInterpolator(android.view.animation.AccelerateDecelerateInterpolator())
+            .withEndAction { startIdleFloat() }
+            .start()
+    }
+
+    private fun stopIdleFloat() {
+        floatAnimator = false
+        animate().cancel()
+        translationY = 0f
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        startIdleFloat()
+    }
+
+    override fun onDetachedFromWindow() {
+        stopIdleFloat()
+        bubbleTimer?.let { removeCallbacks(it) }
+        super.onDetachedFromWindow()
+    }
+
     private val idleLines = arrayOf(
         "喵~", "在呢在呢", "戳我干嘛", "加油鸭", "文件传好了吗", "今天也要元气满满"
     )
@@ -352,10 +399,5 @@ class MascotView @JvmOverloads constructor(
         setTransferring(false)
         setMood(MOOD_ANGRY)
         showBubble("传输失败了…")
-    }
-
-    override fun onDetachedFromWindow() {
-        super.onDetachedFromWindow()
-        bubbleTimer?.let { removeCallbacks(it) }
     }
 }

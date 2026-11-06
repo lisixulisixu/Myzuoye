@@ -33,27 +33,48 @@ class ReceiveTarget(
     /** 给用户看的路径，例如「下载/WiFi直传/照片.jpg」 */
     val displayPath: String,
     private val stream: OutputStream,
-    private val onCommit: () -> Unit,
-    private val onDiscard: () -> Unit
+    private val onCommit: () -> Boolean,
+    private val onDiscard: (keepPartial: Boolean) -> Unit,
+    initialWritten: Long = 0L,
+    /**
+     * 续传时把已落盘的那部分喂给 digest。
+     *
+     * 文件级 MD5 是对整份文件算的，只算后半段接上去永远比不上，
+     * 所以断点续传必须先把已有部分重新读一遍——本地读盘比重新下载便宜得多。
+     */
+    private val existingReader: ((java.security.MessageDigest) -> Unit)? = null
 ) {
-    /** 已写入字节数，用于和协议声明的大小核对 */
-    var written: Long = 0L
+    /** 已写入字节数（续传时包含之前已经落盘的部分），用于和协议声明的大小核对 */
+    var written: Long = initialWritten
         private set
+
+    /** 开始时已有的字节数：>0 说明这是一次续传 */
+    val resumedFrom: Long = initialWritten
 
     fun write(bytes: ByteArray) {
         stream.write(bytes)
         written += bytes.size
     }
 
-    fun commit() {
-        runCatching { stream.flush() }
-        runCatching { stream.close() }
-        runCatching { onCommit() }
+    /** 续传开始前调用：把磁盘上已有的字节计入 digest，保证最终 MD5 覆盖整份文件 */
+    fun primeDigest(digest: java.security.MessageDigest) {
+        existingReader?.invoke(digest)
     }
 
-    fun discard() {
+    /** 收尾。返回 false 表示最终落盘失败（续传时要把半成品再复制一次，这一步可能失败） */
+    fun commit(): Boolean {
+        runCatching { stream.flush() }
         runCatching { stream.close() }
-        runCatching { onDiscard() }
+        return runCatching { onCommit() }.getOrDefault(false)
+    }
+
+    /**
+     * 放弃本次接收。
+     * @param keepPartial true 时保留已收到的部分，下次同名同大小的传输可以接着传
+     */
+    fun discard(keepPartial: Boolean = false) {
+        runCatching { stream.close() }
+        runCatching { onDiscard(keepPartial) }
     }
 }
 
@@ -67,14 +88,90 @@ object ReceivedFileStore {
      *
      * 重名不覆盖：自动改成「名字 (1).png」「名字 (2).png」这样的形式。
      * 返回 null 表示无法创建（权限不足 / 存储不可用），调用方应放弃本次传输。
+     *
+     * [expectedSize] 达到 [PartialStore.RESUME_MIN_BYTES] 时走「半成品 + 收完再复制」的路径，
+     * 让传输中断后可以接着传；小文件仍然直接写进下载目录，不多一次拷贝。
      */
-    fun create(context: Context, rawName: String): ReceiveTarget? {
+    fun create(context: Context, rawName: String, expectedSize: Long = 0L): ReceiveTarget? {
         val safeName = sanitizeFileName(rawName)
+        if (expectedSize >= PartialStore.RESUME_MIN_BYTES) {
+            createResumable(context, safeName, expectedSize)?.let { return it }
+            // 半成品目录不可用时退回直写，功能不受影响，只是没有续传能力
+        }
+        return createDirect(context, safeName)
+    }
+
+    /** 直接写最终目录（老路径，小文件与降级时使用） */
+    private fun createDirect(context: Context, safeName: String): ReceiveTarget? {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             createInDownloads(context, safeName)
         } else {
             createLegacy(context, safeName)
         }
+    }
+
+    /**
+     * 大文件：先写应用专属目录里的半成品，收完再复制进下载目录。
+     *
+     * 若已经存在同名同大小的半成品，则以追加方式打开，[ReceiveTarget.resumedFrom]
+     * 就是已经收到的字节数，上层据此告诉发送端从哪继续。
+     */
+    private fun createResumable(context: Context, safeName: String, size: Long): ReceiveTarget? {
+        val existing = PartialStore.lengthOf(context, safeName, size).coerceAtMost(size)
+        val stream = PartialStore.openAppend(context, safeName, size, append = existing > 0) ?: return null
+
+        return ReceiveTarget(
+            fileName = safeName,
+            displayPath = "下载/$SUB_DIR/$safeName",
+            stream = stream,
+            initialWritten = existing,
+            onCommit = { copyPartialToFinal(context, safeName, size) },
+            onDiscard = { keepPartial ->
+                if (!keepPartial) PartialStore.delete(context, safeName, size)
+            },
+            existingReader = if (existing > 0) {
+                { digest ->
+                    runCatching {
+                        val part = PartialStore.fileFor(context, safeName, size)
+                        part?.inputStream()?.use { input ->
+                            val buffer = ByteArray(COPY_BUFFER_BYTES)
+                            while (true) {
+                                val read = input.read(buffer)
+                                if (read < 0) break
+                                digest.update(buffer, 0, read)
+                            }
+                        }
+                    }
+                }
+            } else {
+                null
+            }
+        )
+    }
+
+    /** 把半成品复制进「下载/WiFi直传」，成功后才删除半成品 */
+    private fun copyPartialToFinal(context: Context, safeName: String, size: Long): Boolean {
+        val part = PartialStore.fileFor(context, safeName, size) ?: return false
+        val final = createDirect(context, safeName) ?: return false
+
+        val copied = runCatching {
+            part.inputStream().use { input ->
+                val buffer = ByteArray(COPY_BUFFER_BYTES)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    final.write(if (read == buffer.size) buffer else buffer.copyOf(read))
+                }
+            }
+            final.commit()
+        }.getOrDefault(false)
+
+        if (copied) {
+            runCatching { part.delete() }
+        } else {
+            runCatching { final.discard() }
+        }
+        return copied
     }
 
     /** 一条已接收文件的信息，用于列表展示 */
@@ -98,8 +195,22 @@ object ReceivedFileStore {
         }
     }.getOrDefault(emptyList())
 
-    private fun listFromMediaStore(context: Context): List<ReceivedFile> {
-        val resolver = context.contentResolver
+    /**
+     * 删除一个已接收文件。
+     *
+     * 本应用自己创建的 MediaStore 条目不需要额外权限就能删；
+     * 旧系统上是普通文件，直接 delete。删不掉也不抛异常，只返回 false 让界面提示。
+     */
+    fun delete(context: Context, file: ReceivedFile): Boolean {
+        return if (file.uri.scheme == "file") {
+            runCatching { File(file.uri.path.orEmpty()).delete() }.getOrDefault(false)
+        } else {
+            runCatching { context.contentResolver.delete(file.uri, null, null) > 0 }
+                .getOrDefault(false)
+        }
+    }
+
+    private fun listFromMediaStore(context: Context): List<ReceivedFile> {        val resolver = context.contentResolver
         val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         val relativePath = "${Environment.DIRECTORY_DOWNLOADS}/$SUB_DIR/"
 
@@ -175,9 +286,9 @@ object ReceivedFileStore {
                     val done = ContentValues().apply {
                         put(MediaStore.MediaColumns.IS_PENDING, 0)
                     }
-                    resolver.update(uri, done, null, null)
+                    runCatching { resolver.update(uri, done, null, null) }.isSuccess
                 },
-                onDiscard = { runCatching { resolver.delete(uri, null, null) } }
+                onDiscard = { _ -> runCatching { resolver.delete(uri, null, null) }; Unit }
             )
         }.getOrNull()
     }
@@ -233,8 +344,8 @@ object ReceivedFileStore {
                 fileName = file.name,
                 displayPath = file.absolutePath,
                 stream = FileOutputStream(file),
-                onCommit = {},
-                onDiscard = { runCatching { file.delete() } }
+                onCommit = { true },
+                onDiscard = { _ -> runCatching { file.delete() }; Unit }
             )
         }.getOrNull()
     }
@@ -300,4 +411,7 @@ object ReceivedFileStore {
 
     /** 重名最多尝试这么多次，超出就用时间戳兜底 */
     private const val MAX_DUPLICATE_INDEX = 999
+
+    /** 半成品复制到下载目录时的缓冲区：一次 256KB，比逐块 64KB 少一大截系统调用 */
+    private const val COPY_BUFFER_BYTES = 256 * 1024
 }

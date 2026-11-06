@@ -6,14 +6,25 @@
     android:clickable="true"
     android:focusable="true"
     android:gravity="center_vertical"
-    android:minHeight="64dp"
+    android:minHeight="72dp"
     android:orientation="horizontal"
-    android:paddingHorizontal="16dp"
+    android:paddingHorizontal="12dp"
     android:paddingVertical="10dp">
+
+    <!-- 缩略图：图片/视频显示封面，其他类型只显示纯色块 -->
+    <ImageView
+        android:id="@+id/ivThumb"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="@drawable/bg_thumb"
+        android:clipToOutline="true"
+        android:contentDescription="@null"
+        android:scaleType="centerCrop" />
 
     <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
         android:layout_weight="1"
         android:orientation="vertical">
 
@@ -23,25 +34,38 @@
             android:layout_height="wrap_content"
             android:ellipsize="middle"
             android:maxLines="1"
-            android:textSize="15sp" />
+            android:textSize="15sp" 
+            android:textColor="@color/text_primary"/>
 
         <TextView
             android:id="@+id/tvFileMeta"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
-            android:textSize="12sp" />
+            android:textSize="12sp" 
+            android:textColor="@color/text_secondary"/>
     </LinearLayout>
 
     <TextView
-        android:id="@+id/tvFileAction"
+        android:id="@+id/tvFileShare"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginStart="12dp"
-        android:paddingHorizontal="12dp"
-        android:paddingVertical="6dp"
-        android:text="@string/files_open"
-        android:textColor="?attr/colorAccent"
+        android:background="?attr/selectableItemBackground"
+        android:paddingHorizontal="10dp"
+        android:paddingVertical="8dp"
+        android:text="@string/files_share"
+        android:textColor="@color/primary_light"
+        android:textSize="13sp" />
+
+    <TextView
+        android:id="@+id/tvFileDelete"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:background="?attr/selectableItemBackground"
+        android:paddingHorizontal="10dp"
+        android:paddingVertical="8dp"
+        android:text="@string/files_delete"
+        android:textColor="#D9534F"
         android:textSize="13sp" />
 
 </LinearLayout>

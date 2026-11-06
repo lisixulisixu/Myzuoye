@@ -40,8 +40,37 @@ object TransferProtocol {
     /** 传输被对端取消 */
     const val TYPE_FILE_CANCEL: Byte = 0x05
 
-    /** 分片固定大小 */
-    const val CHUNK_SIZE = 8 * 1024
+    /**
+     * 续传应答：接收端告诉发送端「我已经有这么多字节了」。
+     *
+     * payload 为 long（大端）。只有协议版本 ≥ 2 的发送端才会等这个帧；
+     * 老版本发送端发来的文件头版本是 0，接收端不会回它，双方各走各的路径，
+     * 不会出现「老发送端发全量、新接收端从偏移追加」这种把文件写坏的情况。
+     */
+    const val TYPE_FILE_RESUME: Byte = 0x06
+
+    /**
+     * 当前协议版本，写在文件头的第 1 个字节。
+     *
+     * - 0：早期版本，文件头带 MD5、结束帧只有字节数
+     * - 2：文件头 MD5 可为占位符、结束帧带 MD5、支持续传握手
+     */
+    const val VERSION: Byte = 2
+
+    /**
+     * 分片大小。
+     *
+     * 从 8KB 提到 64KB：每帧都要 flush 一次，帧头只有 5 字节，
+     * 分片太小的话系统调用与帧头开销占比很高。实测 64KB 在本机链路上吞吐最好，
+     * 再大意义不大（单帧内存占用会上去）。
+     */
+    const val CHUNK_SIZE = 64 * 1024
+
+    /** MD5 占位值：发送端边发边算，发文件头时还不知道最终 MD5，先填这个 */
+    const val MD5_PLACEHOLDER = "00000000000000000000000000000000"
+
+    /** MD5 十六进制长度（大写） */
+    const val MD5_HEX_LEN = 32
 
     /** 单帧上限。文件分片 8KB，头/文本都远小于此；上限只为防止异常帧把内存撑爆 */
     private const val MAX_FRAME_BYTES = 4 * 1024 * 1024
@@ -53,15 +82,22 @@ object TransferProtocol {
         writeFrame(out, TYPE_TEXT, bytes)
     }
 
+    /**
+     * 写文件头。
+     *
+     * [FileHeader.md5Hex] 允许为空——发送端改成「边发边算」后，发文件头时 MD5 还没算出来，
+     * 先写 [MD5_PLACEHOLDER] 占位，真正的 MD5 放在结束帧里回传。
+     */
     fun writeFileHeader(out: DataOutputStream, header: FileHeader) {
         val nameBytes = header.fileName.toByteArray(StandardCharsets.UTF_8)
-        val md5Bytes = header.md5Hex.uppercase().toByteArray(StandardCharsets.US_ASCII)
-        check(md5Bytes.size == 32) { "MD5 必须为 32 个十六进制字符" }
+        val md5Text = if (header.md5Hex.isBlank()) MD5_PLACEHOLDER else header.md5Hex.uppercase()
+        val md5Bytes = md5Text.toByteArray(StandardCharsets.US_ASCII)
+        check(md5Bytes.size == MD5_HEX_LEN) { "MD5 必须为 $MD5_HEX_LEN 个十六进制字符" }
 
         val payload = ByteArray(1 + 2 + nameBytes.size + 8 + 32)
         var offset = 0
 
-        payload[offset++] = 0 // 预留：协议版本
+        payload[offset++] = VERSION // 协议版本：接收端据此决定要不要发续传应答
         payload[offset++] = (nameBytes.size ushr 8).toByte()
         payload[offset++] = nameBytes.size.toByte()
         System.arraycopy(nameBytes, 0, payload, offset, nameBytes.size)
@@ -77,14 +113,36 @@ object TransferProtocol {
         writeFrame(out, TYPE_FILE_CHUNK, chunk)
     }
 
+    /** 旧格式结束帧：只有总字节数 */
     fun writeFileEnd(out: DataOutputStream, totalBytes: Long) {
         val payload = ByteArray(8)
         writeLong(payload, 0, totalBytes)
         writeFrame(out, TYPE_FILE_END, payload)
     }
 
+    /**
+     * 新格式结束帧：总字节数 + 发送端最终算出的 MD5。
+     *
+     * 接收端两种长度都要能读：8 字节（旧客户端）与 8+32 字节（新客户端）。
+     */
+    fun writeFileEnd(out: DataOutputStream, totalBytes: Long, md5Hex: String) {
+        val md5Bytes = md5Hex.uppercase().toByteArray(StandardCharsets.US_ASCII)
+        check(md5Bytes.size == MD5_HEX_LEN) { "MD5 必须为 $MD5_HEX_LEN 个十六进制字符" }
+        val payload = ByteArray(8 + MD5_HEX_LEN)
+        writeLong(payload, 0, totalBytes)
+        System.arraycopy(md5Bytes, 0, payload, 8, MD5_HEX_LEN)
+        writeFrame(out, TYPE_FILE_END, payload)
+    }
+
     fun writeFileCancel(out: DataOutputStream) {
         writeFrame(out, TYPE_FILE_CANCEL, ByteArray(0))
+    }
+
+    /** 回一个续传应答：接收端已有的字节数 */
+    fun writeFileResume(out: DataOutputStream, offset: Long) {
+        val payload = ByteArray(8)
+        writeLong(payload, 0, offset)
+        writeFrame(out, TYPE_FILE_RESUME, payload)
     }
 
     private fun writeFrame(out: DataOutputStream, type: Byte, payload: ByteArray) {
@@ -123,7 +181,8 @@ object TransferProtocol {
             check(payload.size >= 1 + 2 + 8 + 16) { "文件头长度异常：${payload.size}" }
 
             var offset = 0
-            // payload[0] 是协议版本，当前忽略
+            // payload[0] 是协议版本
+            val version = payload[offset].toInt() and 0xFF
             offset += 1
 
             val nameLen = ((payload[offset].toInt() and 0xFF) shl 8) or (payload[offset + 1].toInt() and 0xFF)
@@ -139,13 +198,33 @@ object TransferProtocol {
 
             val md5 = String(payload, offset, 32, StandardCharsets.US_ASCII)
 
-            return FileHeader(name, size, md5)
+            return FileHeader(name, size, md5, version)
         }
 
+        /** 解析续传应答里的偏移量 */
+        fun asResumeOffset(): Long {
+            check(type == TYPE_FILE_RESUME) { "不是续传应答帧" }
+            check(payload.size >= 8) { "续传应答长度异常：${payload.size}" }
+            return readLong(payload, 0)
+        }
+
+        /** 旧接口：只取总字节数。新格式（带 MD5）也能用，忽略尾部 MD5 */
         fun asLong(): Long {
             check(type == TYPE_FILE_END) { "不是结束帧" }
-            check(payload.size == 8) { "结束帧长度异常：${payload.size}" }
+            check(payload.size >= 8) { "结束帧长度异常：${payload.size}" }
             return readLong(payload, 0)
+        }
+
+        /** 解析结束帧：总字节数 + 可选的 MD5（旧客户端发来的没有 MD5） */
+        fun asFileEnd(): FileEnd {
+            check(type == TYPE_FILE_END) { "不是结束帧" }
+            check(payload.size >= 8) { "结束帧长度异常：${payload.size}" }
+            val md5 = if (payload.size >= 8 + MD5_HEX_LEN) {
+                String(payload, 8, MD5_HEX_LEN, StandardCharsets.US_ASCII)
+            } else {
+                null
+            }
+            return FileEnd(readLong(payload, 0), md5)
         }
     }
 
@@ -154,7 +233,26 @@ object TransferProtocol {
     data class FileHeader(
         val fileName: String,
         val fileSize: Long,
-        val md5Hex: String
+        /** 为空或等于 [MD5_PLACEHOLDER] 时表示「发送端还没算出来，见结束帧」 */
+        val md5Hex: String,
+        /** 对端协议版本；0 表示老版本客户端 */
+        val version: Int = 0
+    ) {
+        /** 文件头里是否带了真实 MD5 */
+        val md5Known: Boolean
+            get() = md5Hex.length == MD5_HEX_LEN &&
+                !md5Hex.equals(MD5_PLACEHOLDER, ignoreCase = true)
+
+        /** 对端是否支持续传握手（版本 2 起） */
+        val supportsResume: Boolean
+            get() = version >= 2
+    }
+
+    /** 结束帧内容 */
+    data class FileEnd(
+        val totalBytes: Long,
+        /** 发送端最终 MD5；旧客户端为 null */
+        val md5Hex: String?
     )
 
     // ------------------------------------------------------------------ 工具
