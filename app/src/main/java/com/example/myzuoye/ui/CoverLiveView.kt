@@ -3,7 +3,6 @@ package com.example.myzuoye.ui
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -18,32 +17,34 @@ import android.view.Choreographer
 import android.view.View
 import com.example.myzuoye.R
 import kotlin.math.cos
-import kotlin.math.hypot
 import kotlin.math.max
-import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.random.Random
 
 /**
- * 封面动态层：直接接管那张「相拥」插画的绘制，并叠加几层会呼吸的动效。
+ * 封面动态层：接管这张「相拥」插画，让画面里的东西真的动起来。
  *
- * 分五层，从下往上：
- * 1. **底图**：慢速 Ken Burns（30 秒一次的轻微推近/平移）+ 贴合「呼吸」的极小幅缩放，
- *    幅度控制在 0.6% 以内，静止看几乎察觉不到，但画面不会像一张贴纸；
- * 2. **光束微光**：顺着原图左上来的窗光做一层极淡的流动亮带，亮度随时间来回；
- * 3. **浮尘**：十几颗微小亮点在光束区域缓慢上浮，模拟空气里的尘埃，也让静态图「活」起来；
- * 4. **发梢**：沿女生长发外缘程序化绘制 16 根带锥度的发丝，发根几乎不动、发梢摆幅最大，
- *    颜色取「被窗光照亮的边缘光」，所以是在深色背景与黑发之间都能看清的冷色调；
- * 5. **收尾**：底部压暗渐变（与页面背景同色，衔接自然）+ 四角轻微暗角。
+ * 和上一版的区别：
+ * 1. **头发是真的在动**——不再是往图上画几根发光线条，而是把整张图铺成一张
+ *    [MESH_COLS] × [MESH_ROWS] 的网格，只让长发那一块按 [HairField] 的位移场弯折，
+ *    所以动的是原图里的头发像素本身，循环播放、没有接缝；
+ * 2. **光线不再突兀**——发丝线条全部删除，改成几团极淡的柔光落在头发受光的一侧，
+ *    缓慢呼吸，看上去是「光打在头发上」，而不是「头发上贴了几道白线」；
+ * 3. **环境特效补回来了**——漂移光斑、斜射光束、焦外光点、浮尘、星芒，亮度都压得很低，
+ *    效果是画面「活的」，不抢人物。
+ *
+ * 层的顺序（下 → 上）：
+ * 底图（网格形变）→ 头发柔光 → 光束 → 光斑 → 焦外光点 → 浮尘 → 星芒 → 爱心 → 压暗 + 暗角。
  *
  * 交互与状态：
- * - 传输成功时调 [celebrate]，从底部升起一串爱心并短暂提高暖光强度；
- * - [setMood] 让边缘光跟随连接状态变色（未连接冷蓝 / 已连接青绿 / 传输中紫 / 失败暖红）。
+ * - 传输成功调 [celebrate]：爱心升空 + 短暂暖光；
+ * - [setMood] 让头发柔光跟随连接状态变色（未连接冷蓝 / 已连接青绿 / 传输中淡紫 / 失败暖红）。
  *
  * 性能取舍：
- * - Choreographer 帧循环，dt 封顶 1/30 秒，卡顿时不会「跳帧」；
- * - 发丝在**位图坐标系**里绘制，只 concat 一次矩阵，避免每根发丝都做坐标换算；
- * - 光束与浮尘直接用固定 shader / 画点，不创建位图；
+ * - Choreographer 帧循环，dt 封顶 1/30 秒，卡顿时不「跳帧」；
+ * - 网格顶点坐标一次预计算，每帧只做一次 `Matrix.mapPoints` + 700 次正弦，无对象分配；
+ * - 所有渐变 shader 在 [onSizeChanged] 里建好，每帧只改 `Paint.alpha` 并用 canvas 平移，
+ *   避免每帧 new RadialGradient 触发 GC；
  * - 不可见或离屏时停止循环，零开销；系统关闭动画时只画静态一帧。
  *
  * 这个 View 纯粹是装饰，不重写 onTouchEvent，绝不拦截点击。
@@ -54,17 +55,27 @@ class CoverLiveView @JvmOverloads constructor(
 ) : View(context, attrs) {
 
     companion object {
-        /** 未连接：冷蓝边缘光 */
+        /** 未连接：冷蓝柔光 */
         const val MOOD_IDLE = 0
 
-        /** 已连接：青绿边缘光 */
+        /** 已连接：青绿柔光 */
         const val MOOD_CONNECTED = 1
 
-        /** 传输中：淡紫边缘光，配合爱心显得「热闹」 */
+        /** 传输中：淡紫柔光 */
         const val MOOD_TRANSFER = 2
 
-        /** 失败：暖红边缘光 */
+        /** 失败：暖红柔光 */
         const val MOOD_ERROR = 3
+
+        /**
+         * 网格密度。34 × 19 个格子（700 个顶点）在 1280 宽的图上刚好够顺：
+         * 再稀会在头发边缘看到折线，再密 CPU 端每帧的正弦就白算了。
+         */
+        private const val MESH_COLS = 34
+        private const val MESH_ROWS = 19
+
+        /** 发梢最大摆幅（dp）。再大头发轮廓会和背景「拖影」分离 */
+        private const val SWAY_DP = 4.2f
     }
 
     private val density = resources.displayMetrics.density
@@ -73,25 +84,37 @@ class CoverLiveView @JvmOverloads constructor(
         BitmapFactory.decodeResource(resources, R.drawable.p1)
     }.getOrNull()
 
-    private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
-    private val strandPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-        // 柔化边缘：硬边细线在深色背景上会像「划痕」，模糊一点才像被光照亮的发丝
-        maskFilter = BlurMaskFilter(0.9f * density, BlurMaskFilter.Blur.NORMAL)
-    }
-    private val motePaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val beamPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val scrimPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val heartPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-    }
+    private val photoPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
     private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val beamPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val motePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val sparkPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 0.9f * density
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val scrimPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val vignettePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val heartPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
 
     private val matrix = Matrix()
-    private val hairPath = Path()
+    private val tmpPath = Path()
 
-    /** 底图缩放到铺满控件的比例，onSizeChanged 时算一次 */
+    /** 底图铺满控件的比例，onSizeChanged 时算一次 */
     private var baseScale = 1f
+
+    /** 网格：顶点原始坐标（位图坐标）、每帧结果（屏幕坐标）、每个顶点的形变权重 */
+    private var baseVerts = FloatArray(0)
+    private var verts = FloatArray(0)
+    private var weights = FloatArray(0)
+
+    // ---- 预建渐变（坐标按 onSizeChanged 的尺寸，动画只平移 canvas / 改 alpha）
+    private var beamShader: Shader? = null
+    private var vignetteShader: Shader? = null
+    private var scrimShader: Shader? = null
+    private var coolShader: Shader? = null
+    private var warmShader: Shader? = null
+    private var hairShader: Shader? = null
 
     /** 动画时间（秒） */
     private var time = 0f
@@ -114,55 +137,69 @@ class CoverLiveView @JvmOverloads constructor(
         }.getOrDefault(false)
     }
 
-    // ------------------------------------------------------------------ 发丝定义
+    // ------------------------------------------------------------------ 特效定义
 
     /**
-     * 一根发丝：坐标全部归一化到图片（0..1），绘制时 concat 底图矩阵，跟着缩放一起走。
-     *
-     * [bow] 是弯曲方向：正数向外鼓、负数向内收；
-     * [phase] 错开摆动节奏，避免 16 根同时甩。
+     * 一团柔光。位置、半径都归一化（半径按控件宽度折算），
+     * [alpha] 是峰值不透明度，[phase] 错开呼吸节奏，[drift] 是游走的幅度（0 = 不动）。
      */
-    private class Strand(
-        val x0: Float,
-        val y0: Float,
-        val x1: Float,
-        val y1: Float,
-        val bow: Float,
+    private class Glow(
+        val x: Float,
+        val y: Float,
+        val r: Float,
+        val alpha: Int,
         val phase: Float,
-        val widthDp: Float,
-        val alpha: Int
+        val drift: Float
+    )
+
+    /** 环境光斑：三团大而极淡的柔光，在画面里缓慢游走，是「活起来」最省的一层 */
+    private val spots = arrayOf(
+        Glow(0.16f, 0.28f, 0.34f, 15, 0.0f, 0.55f),
+        Glow(0.58f, 0.16f, 0.25f, 10, 2.1f, 0.40f),
+        Glow(0.31f, 0.76f, 0.27f, 12, 4.0f, 0.35f)
     )
 
     /**
-     * 发丝都贴着女生长发的外缘走：从头部左侧绕到右上方，再顺着发尾垂到右下。
-     * 参数是照着画面反复比对调出来的，改动前建议先截图对照。
+     * 头发柔光：沿着长发受光的一侧（左上来的窗光）铺五团小柔光，
+     * 叠起来像一条贴着发丝走向的高光带——比原来的「白线」淡得多，
+     * 但落在头发上，看起来是「光」，不是「贴上去的线」。
      */
-    private val strands = arrayOf(
-        // 面部左侧的碎发（两条，幅度小）
-        Strand(0.452f, 0.400f, 0.408f, 0.462f, -0.30f, 0.00f, 1.5f, 120),
-        Strand(0.462f, 0.415f, 0.421f, 0.487f, -0.22f, 1.10f, 1.2f, 96),
-        // 头顶到右肩的轮廓（沿发丝走向）
-        Strand(0.470f, 0.375f, 0.560f, 0.428f, 0.26f, 2.20f, 1.6f, 104),
-        Strand(0.487f, 0.385f, 0.610f, 0.462f, 0.22f, 0.70f, 1.5f, 96),
-        Strand(0.500f, 0.397f, 0.658f, 0.498f, 0.18f, 3.10f, 1.4f, 90),
-        Strand(0.512f, 0.412f, 0.700f, 0.540f, 0.15f, 1.60f, 1.5f, 108),
-        Strand(0.520f, 0.430f, 0.731f, 0.588f, 0.12f, 4.05f, 1.3f, 88),
-        // 发尾最外沿（摆幅最大，也是「发梢会动」最容易被看到的地方）
-        Strand(0.528f, 0.450f, 0.757f, 0.640f, 0.10f, 2.65f, 1.7f, 116),
-        Strand(0.534f, 0.470f, 0.769f, 0.685f, 0.08f, 5.20f, 1.5f, 104),
-        Strand(0.536f, 0.492f, 0.762f, 0.722f, 0.06f, 0.35f, 1.6f, 100),
-        Strand(0.532f, 0.520f, 0.742f, 0.756f, 0.04f, 3.70f, 1.4f, 92),
-        Strand(0.522f, 0.548f, 0.712f, 0.782f, 0.02f, 1.95f, 1.3f, 84),
-        // 下方散落的几缕
-        Strand(0.508f, 0.572f, 0.678f, 0.800f, -0.02f, 4.60f, 1.2f, 78),
-        Strand(0.492f, 0.594f, 0.640f, 0.810f, -0.04f, 2.90f, 1.1f, 70),
-        Strand(0.474f, 0.610f, 0.598f, 0.806f, -0.06f, 0.95f, 1.0f, 62),
-        Strand(0.456f, 0.622f, 0.556f, 0.792f, -0.08f, 5.60f, 0.9f, 56)
+    private val hairGlows = arrayOf(
+        Glow(0.462f, 0.372f, 0.080f, 26, 0.0f, 0.28f),
+        Glow(0.500f, 0.420f, 0.090f, 30, 0.9f, 0.34f),
+        Glow(0.545f, 0.468f, 0.100f, 32, 1.8f, 0.42f),
+        Glow(0.590f, 0.518f, 0.095f, 26, 2.7f, 0.46f),
+        Glow(0.520f, 0.612f, 0.082f, 22, 3.6f, 0.34f)
     )
 
-    // ------------------------------------------------------------------ 浮尘 / 爱心
+    /** 焦外光点：光束里几个虚焦的小圆，给画面一点纵深 */
+    private val bokeh = arrayOf(
+        Glow(0.200f, 0.520f, 0.030f, 26, 0.7f, 0.80f),
+        Glow(0.330f, 0.200f, 0.022f, 20, 2.9f, 0.70f),
+        Glow(0.450f, 0.700f, 0.026f, 17, 4.3f, 0.90f),
+        Glow(0.620f, 0.340f, 0.020f, 13, 5.1f, 0.60f),
+        Glow(0.100f, 0.760f, 0.018f, 11, 1.9f, 0.50f)
+    )
 
-    private class Mote(var x: Float, var y: Float, var r: Float, var vy: Float, var phase: Float)
+    /** 星芒：极小的十字高光，亮度做三次方衰减，闪一下就灭，像空气里的亮尘 */
+    private class Spark(val x: Float, val y: Float, val size: Float, val phase: Float)
+
+    private val sparks = arrayOf(
+        Spark(0.300f, 0.235f, 3.4f, 0.0f),
+        Spark(0.385f, 0.545f, 2.6f, 1.7f),
+        Spark(0.225f, 0.620f, 3.0f, 3.1f),
+        Spark(0.470f, 0.180f, 2.2f, 4.6f)
+    )
+
+    private class Mote(
+        var x: Float,
+        var y: Float,
+        var r: Float,
+        var vy: Float,
+        var vx: Float,
+        var phase: Float,
+        var warm: Boolean
+    )
 
     private class Heart(
         var x: Float,
@@ -241,20 +278,19 @@ class CoverLiveView @JvmOverloads constructor(
                 life = 1f
             )
         }
-        if (!animationsOff && !looping) {
-            // 极少数情况下动画被停掉了（比如刚回到前台），补一帧让它动起来
-            startLoop()
-        }
+        if (!animationsOff && !looping) startLoop()
     }
 
-    /** 边缘光跟随连接状态变色 */
+    /** 头发柔光跟随连接状态变色 */
     fun setMood(newMood: Int) {
         if (mood == newMood) return
         mood = newMood
+        hairShader = null
+        ensureShaders(width.toFloat(), height.toFloat())
         invalidate()
     }
 
-    // ------------------------------------------------------------------ 尺寸 / 动画
+    // ------------------------------------------------------------------ 尺寸 / 网格
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
@@ -262,47 +298,120 @@ class CoverLiveView @JvmOverloads constructor(
         val bmp = bitmap ?: return
         // 铺满控件（centerCrop）：留 7% 余量给推近与平移，避免边缘露白
         baseScale = max(w.toFloat() / bmp.width, h.toFloat() / bmp.height) * 1.07f
-        buildScrim(w.toFloat(), h.toFloat())
+        buildMesh(bmp)
+        // 这几个渐变按尺寸定位，尺寸一变（旋转 / 分屏）必须重建
+        beamShader = null
+        vignetteShader = null
+        scrimShader = null
+        ensureShaders(w.toFloat(), h.toFloat())
         if (motes.isEmpty()) spawnMotes(w.toFloat(), h.toFloat())
     }
 
-    private fun buildScrim(w: Float, h: Float) {
-        val bottom = context.getColor(R.color.bg_grad_top)
-        // 底部过渡到页面背景色，封面与下方内容之间不会出现一条硬边
-        scrimPaint.shader = LinearGradient(
-            0f, h * 0.42f, 0f, h,
-            intArrayOf(Color.TRANSPARENT, (0xB3 shl 24) or (bottom and 0xFFFFFF), bottom),
-            floatArrayOf(0f, 0.62f, 1f),
-            Shader.TileMode.CLAMP
-        )
+    private fun buildMesh(bmp: Bitmap) {
+        val n = (MESH_COLS + 1) * (MESH_ROWS + 1)
+        if (baseVerts.size != n * 2) {
+            baseVerts = FloatArray(n * 2)
+            verts = FloatArray(n * 2)
+            weights = FloatArray(n)
+        }
+        var k = 0
+        for (j in 0..MESH_ROWS) {
+            val v = j.toFloat() / MESH_ROWS
+            for (i in 0..MESH_COLS) {
+                val u = i.toFloat() / MESH_COLS
+                baseVerts[k * 2] = u * bmp.width
+                baseVerts[k * 2 + 1] = v * bmp.height
+                weights[k] = HairField.weight(u, v)
+                k++
+            }
+        }
     }
 
-    private fun spawnMotes(w: Float, h: Float) {
-        val random = Random(System.nanoTime())
-        repeat(18) {
-            motes += Mote(
-                // 光束在原图左上到中部，浮尘集中在这一带才自然
-                x = w * (0.06f + random.nextFloat() * 0.5f),
-                y = h * (0.05f + random.nextFloat() * 0.85f),
-                r = (0.7f + random.nextFloat() * 1.6f) * density,
-                vy = 0.008f + random.nextFloat() * 0.022f,
-                phase = random.nextFloat() * 6.28f
+    /**
+     * 所有渐变提前建好。除了按尺寸定位的那几个，柔光类都用「圆心在原点、半径 1」的写法，
+     * 绘制时靠 `canvas.translate + scale` 摆到目标位置——这样一个 shader 就能给所有光点复用。
+     */
+    private fun ensureShaders(w: Float, h: Float) {
+        if (w <= 0f || h <= 0f) return
+        if (coolShader == null) coolShader = softShader(0xBFE3FF)
+        if (warmShader == null) warmShader = softShader(0xFFE3C4)
+        if (hairShader == null) hairShader = softShader(rimColor())
+
+        if (beamShader == null) {
+            // 顺着原图左上窗光的方向铺一条极淡的斜向亮带；亮度靠 Paint.alpha 调，不重建 shader
+            beamShader = LinearGradient(
+                w * 0.08f, 0f, w * 0.66f, h,
+                intArrayOf(Color.TRANSPARENT, 0xFFBBE0FF.toInt(), 0x70BBE0FF, Color.TRANSPARENT),
+                floatArrayOf(0f, 0.38f, 0.72f, 1f),
+                Shader.TileMode.CLAMP
+            )
+        }
+        if (vignetteShader == null) {
+            vignetteShader = RadialGradient(
+                w * 0.5f, h * 0.46f, max(w, h) * 0.78f,
+                intArrayOf(Color.TRANSPARENT, Color.TRANSPARENT, 0x7A000000),
+                floatArrayOf(0f, 0.62f, 1f),
+                Shader.TileMode.CLAMP
+            )
+        }
+        if (scrimShader == null) {
+            // 底部压到页面背景色，封面与下方内容之间不会出现一条硬边
+            val bottom = context.getColor(R.color.bg_grad_top)
+            scrimShader = LinearGradient(
+                0f, h * 0.42f, 0f, h,
+                intArrayOf(Color.TRANSPARENT, (0xB3 shl 24) or (bottom and 0xFFFFFF), bottom),
+                floatArrayOf(0f, 0.62f, 1f),
+                Shader.TileMode.CLAMP
             )
         }
     }
 
+    /** 圆心 (0,0)、半径 1 的柔光：中心实、边缘全透明，避免出现圆的硬边 */
+    private fun softShader(color: Int): Shader = RadialGradient(
+        0f, 0f, 1f,
+        intArrayOf(
+            (0xFF shl 24) or (color and 0xFFFFFF),
+            (0x66 shl 24) or (color and 0xFFFFFF),
+            (0x00 shl 24) or (color and 0xFFFFFF)
+        ),
+        floatArrayOf(0f, 0.42f, 1f),
+        Shader.TileMode.CLAMP
+    )
+
+    private fun spawnMotes(w: Float, h: Float) {
+        val random = Random(System.nanoTime())
+        repeat(22) {
+            motes += Mote(
+                // 光束在原图左上到中部，浮尘集中在这一带才自然
+                x = w * (0.04f + random.nextFloat() * 0.55f),
+                y = h * (0.05f + random.nextFloat() * 0.9f),
+                r = (0.6f + random.nextFloat() * 1.5f) * density,
+                vy = 0.008f + random.nextFloat() * 0.020f,
+                vx = (random.nextFloat() - 0.5f) * 0.006f,
+                phase = random.nextFloat() * 6.28f,
+                warm = random.nextFloat() < 0.28f
+            )
+        }
+    }
+
+    // ------------------------------------------------------------------ 动画推进
+
     private fun advance(dt: Float) {
         time += dt
-        val h = height.toFloat()
         val w = width.toFloat()
+        val h = height.toFloat()
+        if (w <= 0f || h <= 0f) return
 
         for (m in motes) {
             m.y -= m.vy * dt * h
+            m.x += (m.vx + sin(time * 0.5f + m.phase) * 0.004f) * dt * w
             m.phase += dt * 0.9f
             if (m.y < -m.r * 4f) {
                 m.y = h + m.r * 4f
-                m.x = w * (0.06f + Random.nextFloat() * 0.5f)
+                m.x = w * (0.04f + Random.nextFloat() * 0.55f)
             }
+            if (m.x < -m.r * 4f) m.x = w + m.r * 4f
+            if (m.x > w + m.r * 4f) m.x = -m.r * 4f
         }
 
         if (hearts.isNotEmpty()) {
@@ -324,184 +433,177 @@ class CoverLiveView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        render(canvas, if (animationsOff) 0f else time)
+    }
+
+    /** 抽出成独立函数，测试里可以用固定时间点渲染，方便逐帧比对 */
+    internal fun render(canvas: Canvas, t: Float) {
         val w = width.toFloat()
         val h = height.toFloat()
         val bmp = bitmap ?: return
-        if (w <= 0f || h <= 0f) return
-        val t = if (animationsOff) 0f else time
+        if (w <= 0f || h <= 0f || baseVerts.isEmpty()) return
 
         drawPhoto(canvas, bmp, w, h, t)
+        drawHairGlow(canvas, w, h, t)
         drawBeam(canvas, w, h, t)
+        drawSpots(canvas, w, h, t)
+        drawBokeh(canvas, w, h, t)
         drawMotes(canvas, t)
-        drawHair(canvas, bmp, t)
+        drawSparks(canvas, w, h, t)
         drawHearts(canvas)
-        canvas.drawRect(0f, 0f, w, h, scrimPaint)
+        drawFinish(canvas, w, h, t)
     }
 
-    /** 底图：Ken Burns 推近 + 轻微横移 + 呼吸起伏（幅度都很小） */
+    /**
+     * 底图：慢速 Ken Burns（推近 + 横移）+ 呼吸，再把长发那一块按 [HairField] 的位移场弯折。
+     *
+     * 摆动位移直接加在「已经过矩阵映射的屏幕坐标」上，所以摆幅和控件尺寸无关，
+     * 手机横竖屏、不同分辨率下看到的头发摆幅是一致的。
+     */
     private fun drawPhoto(canvas: Canvas, bmp: Bitmap, w: Float, h: Float, t: Float) {
-        val zoom = 1f + 0.022f * sin(t * 0.21f)
-        // 呼吸：约 5.5 秒一次，只影响 0.4%，静止盯着看才觉得在动
+        // 整体推移幅度比上一版再收一点，让「动」主要来自头发而不是整张图
+        val zoom = 1f + 0.014f * sin(t * 0.21f)
         val breath = 1f + 0.004f * sin(t * 1.15f)
         val scale = baseScale * zoom * breath
-        val panX = w * 0.008f * sin(t * 0.13f)
-        val panY = h * 0.006f * cos(t * 0.17f)
+        val panX = w * 0.006f * sin(t * 0.13f)
+        val panY = h * 0.004f * cos(t * 0.17f)
 
         val dx = (w - bmp.width * scale) / 2f + panX
         val dy = (h - bmp.height * scale) / 2f + panY
         matrix.setScale(scale, scale)
         matrix.postTranslate(dx, dy)
-        canvas.drawBitmap(bmp, matrix, bitmapPaint)
+
+        if (animationsOff) {
+            canvas.drawBitmap(bmp, matrix, photoPaint)
+            return
+        }
+
+        matrix.mapPoints(verts, baseVerts)
+        val amp = SWAY_DP * density
+        var k = 0
+        for (j in 0..MESH_ROWS) {
+            val v = j.toFloat() / MESH_ROWS
+            for (i in 0..MESH_COLS) {
+                val wgt = weights[k]
+                if (wgt > 0.004f) {
+                    val u = i.toFloat() / MESH_COLS
+                    val sway = HairField.sway(u, v, t) * amp * wgt
+                    // 头发是向下偏右垂着的，位移以竖直为主、水平只占三成，看起来才像被风撩动
+                    verts[k * 2] += sway * 0.32f
+                    verts[k * 2 + 1] += sway
+                }
+                k++
+            }
+        }
+        canvas.drawBitmapMesh(bmp, MESH_COLS, MESH_ROWS, verts, 0, null, 0, photoPaint)
     }
 
-    /** 顺着原图窗光方向的一层极淡亮带，亮度缓慢起伏 */
-    private fun drawBeam(canvas: Canvas, w: Float, h: Float, t: Float) {
-        val shimmer = 0.45f + 0.55f * ((sin(t * 0.42f) + 1f) / 2f)
-        val alpha = (10 + 14 * shimmer).toInt()
-        beamPaint.shader = LinearGradient(
-            w * 0.1f, 0f, w * 0.62f, h,
-            intArrayOf(Color.TRANSPARENT, (alpha shl 24) or 0xBBD5FF, Color.TRANSPARENT),
-            floatArrayOf(0f, 0.5f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        canvas.drawRect(0f, 0f, w, h, beamPaint)
+    /** 头发柔光：四团极淡的光落在长发受光的一侧，缓慢呼吸、微微游走 */
+    private fun drawHairGlow(canvas: Canvas, w: Float, h: Float, t: Float) {
+        val shader = hairShader ?: return
+        // 庆祝时整体提亮一点，配合爱心
+        val boost = 1f + 0.8f * (celebrateLeft / 2.6f).coerceIn(0f, 1f)
+        for (g in hairGlows) drawGlow(canvas, w, h, g, shader, t, boost)
+    }
 
-        // 传输完成的一瞬间给一团暖光，配合爱心
+    /** 斜射光束 + 庆祝暖光 */
+    private fun drawBeam(canvas: Canvas, w: Float, h: Float, t: Float) {
+        val shader = beamShader ?: return
+        val shimmer = 0.5f + 0.5f * sin(t * 0.42f)
+        beamPaint.shader = shader
+        beamPaint.alpha = (9 + 8 * shimmer).toInt().coerceIn(0, 255)
+        canvas.save()
+        canvas.translate(w * 0.012f * sin(t * 0.19f), h * 0.02f * sin(t * 0.11f))
+        canvas.drawRect(-w * 0.1f, -h * 0.1f, w * 1.1f, h * 1.1f, beamPaint)
+        canvas.restore()
+
         if (celebrateLeft > 0f) {
             val k = (celebrateLeft / 2.6f).coerceIn(0f, 1f)
-            glowPaint.shader = RadialGradient(
-                w * 0.5f, h * 0.72f, w * 0.55f,
-                intArrayOf(((70 * k).toInt() shl 24) or 0xFFC98A, Color.TRANSPARENT),
-                null, Shader.TileMode.CLAMP
-            )
-            canvas.drawRect(0f, 0f, w, h, glowPaint)
+            glowPaint.shader = warmShader
+            glowPaint.alpha = (74 * k).toInt().coerceIn(0, 255)
+            val r = w * 0.55f
+            canvas.save()
+            canvas.translate(w * 0.5f, h * 0.72f)
+            canvas.scale(r, r)
+            canvas.drawRect(-1f, -1f, 1f, 1f, glowPaint)
+            canvas.restore()
         }
+    }
+
+    private fun drawSpots(canvas: Canvas, w: Float, h: Float, t: Float) {
+        val cool = coolShader ?: return
+        val warm = warmShader ?: return
+        spots.forEachIndexed { index, g ->
+            drawGlow(canvas, w, h, g, if (index == 1) warm else cool, t)
+        }
+    }
+
+    private fun drawBokeh(canvas: Canvas, w: Float, h: Float, t: Float) {
+        val cool = coolShader ?: return
+        bokeh.forEachIndexed { index, g ->
+            drawGlow(canvas, w, h, g, if (index % 2 == 1) warmShader ?: cool else cool, t)
+        }
+    }
+
+    /**
+     * 画一团柔光。用「平移 + 缩放 + 画单位圆」而不是 `drawCircle(x, y, r)` 配新 shader，
+     * 是为了让所有光点共用同一个 shader 对象，每帧零分配。
+     */
+    private fun drawGlow(
+        canvas: Canvas,
+        w: Float,
+        h: Float,
+        g: Glow,
+        shader: Shader,
+        t: Float,
+        boost: Float = 1f
+    ) {
+        val pulse = 0.58f + 0.42f * ((sin(t * 0.52f + g.phase) + 1f) / 2f)
+        val alpha = (g.alpha * pulse * boost).toInt()
+        if (alpha <= 0) return
+        val r = g.r * w * (0.94f + 0.09f * sin(t * 0.31f + g.phase))
+        val ox = w * 0.014f * g.drift * sin(t * 0.27f + g.phase)
+        val oy = h * 0.020f * g.drift * cos(t * 0.21f + g.phase * 1.3f)
+
+        glowPaint.shader = shader
+        glowPaint.alpha = alpha.coerceIn(0, 255)
+        canvas.save()
+        canvas.translate(g.x * w + ox, g.y * h + oy)
+        canvas.scale(r, r)
+        // 画单位方框而不是单位圆：渐变在半径 1 之外本来就是全透明，方框只需两个三角形
+        canvas.drawRect(-1f, -1f, 1f, 1f, glowPaint)
+        canvas.restore()
     }
 
     private fun drawMotes(canvas: Canvas, t: Float) {
         for (m in motes) {
             val twinkle = (sin(t * 1.1f + m.phase) + 1f) / 2f
-            val alpha = (26 + 74 * twinkle).toInt().coerceIn(0, 255)
-            motePaint.color = (alpha shl 24) or 0xDCE9FF
+            val alpha = (22 + 78 * twinkle).toInt().coerceIn(0, 255)
+            motePaint.color = if (m.warm) {
+                (alpha shl 24) or 0xFFE9CE
+            } else {
+                (alpha shl 24) or 0xDCE9FF
+            }
             canvas.drawCircle(m.x, m.y, m.r, motePaint)
         }
     }
 
-    /**
-     * 发丝：在位图坐标系里画，外面 concat 一次矩阵。
-     *
-     * 每根用「采样中心线 + 两侧法线偏移」拼成带锥度的闭合路径，
-     * 比直接 drawPath 描一条等宽线更像头发。
-     */
-    private fun drawHair(canvas: Canvas, bmp: Bitmap, t: Float) {
-        canvas.save()
-        canvas.concat(matrix)
-
-        val bw = bmp.width.toFloat()
-        val bh = bmp.height.toFloat()
-        // 线宽按矩阵缩放折算，保证在屏幕上始终是 1dp 左右
-        val scale = baseScale.coerceAtLeast(0.01f)
-        val rimColor = rimColor()
-
-        for (s in strands) {
-            val x0 = s.x0 * bw
-            val y0 = s.y0 * bh
-            val x1 = s.x1 * bw
-            val y1 = s.y1 * bh
-            val dx = x1 - x0
-            val dy = y1 - y0
-            val len = hypot(dx, dy)
-            if (len < 1f) continue
-            val nx = -dy / len
-            val ny = dx / len
-
-            // 发根几乎不动、发梢摆幅最大：用 t^1.7 的权重
-            val sway = sin(t * 1.25f + s.phase) * 0.72f + sin(t * 0.6f + s.phase * 1.7f) * 0.28f
-            val amp = len * 0.11f
-            val bow = s.bow * len * 0.20f
-
-            // 末端朝发根方向回收：露在外面的只是一小段发梢，不是一根横贯画面的长线
-            val tipX = x0 + (x1 - x0) * 0.80f
-            val tipY = y0 + (y1 - y0) * 0.80f
-            val endX = tipX + nx * (sway * amp + bow)
-            val endY = tipY + ny * (sway * amp + bow)
-            val c1x = x0 + dx * 0.42f + nx * bow * 0.7f
-            val c1y = y0 + dy * 0.42f + ny * bow * 0.7f
-            val c2x = x0 + dx * 0.76f + nx * (bow * 0.9f + sway * amp * 0.6f)
-            val c2y = y0 + dy * 0.76f + ny * (bow * 0.9f + sway * amp * 0.6f)
-
-            hairPath.reset()
-            var started = false
-            val steps = 7
-            val halfWidth0 = (s.widthDp * density / scale) * 0.5f
-            // 左半边：从发根到发梢
-            for (i in 0..steps) {
-                val u = i.toFloat() / steps
-                val pt = bezier(x0, y0, c1x, c1y, c2x, c2y, endX, endY, u)
-                val nrm = normalAt(x0, y0, c1x, c1y, c2x, c2y, endX, endY, u)
-                val halfW = halfWidth0 * (1f - u).pow(0.7f)
-                val lx = pt[0] + nrm[0] * halfW
-                val ly = pt[1] + nrm[1] * halfW
-                if (!started) {
-                    hairPath.moveTo(lx, ly)
-                    started = true
-                } else {
-                    hairPath.lineTo(lx, ly)
-                }
-            }
-            // 右半边：从发梢回到发根，闭合出锥形
-            for (i in steps downTo 0) {
-                val u = i.toFloat() / steps
-                val pt = bezier(x0, y0, c1x, c1y, c2x, c2y, endX, endY, u)
-                val nrm = normalAt(x0, y0, c1x, c1y, c2x, c2y, endX, endY, u)
-                val halfW = halfWidth0 * (1f - u).pow(0.7f)
-                hairPath.lineTo(pt[0] - nrm[0] * halfW, pt[1] - nrm[1] * halfW)
-            }
-            hairPath.close()
-
-            // 透明度压到 45% 左右：发丝是「边缘光」，不该比人物本身更抢眼
-            val alpha = (s.alpha * 0.45f).toInt().coerceIn(0, 255)
-            strandPaint.color = (alpha shl 24) or (rimColor and 0xFFFFFF)
-            canvas.drawPath(hairPath, strandPaint)
+    private fun drawSparks(canvas: Canvas, w: Float, h: Float, t: Float) {
+        for (s in sparks) {
+            val twinkle = (sin(t * 1.55f + s.phase) + 1f) / 2f
+            // 三次方让「闪」变得短促：大部分时间很淡，偶尔一下亮起来
+            val k = twinkle * twinkle * twinkle
+            val alpha = (110 * k).toInt()
+            if (alpha < 8) continue
+            val cx = s.x * w
+            val cy = s.y * h
+            val l = s.size * density * (0.5f + k)
+            sparkPaint.color = (alpha shl 24) or 0xF2F7FF
+            canvas.drawLine(cx - l, cy, cx + l, cy, sparkPaint)
+            canvas.drawLine(cx, cy - l * 0.72f, cx, cy + l * 0.72f, sparkPaint)
+            motePaint.color = ((alpha / 2) shl 24) or 0xFFFFFF
+            canvas.drawCircle(cx, cy, l * 0.28f, motePaint)
         }
-
-        canvas.restore()
-    }
-
-    /** 三次贝塞尔上的点 */
-    private fun bezier(
-        x0: Float, y0: Float, x1: Float, y1: Float,
-        x2: Float, y2: Float, x3: Float, y3: Float, t: Float
-    ): FloatArray {
-        val mt = 1f - t
-        val a = mt * mt * mt
-        val b = 3f * mt * mt * t
-        val c = 3f * mt * t * t
-        val d = t * t * t
-        return floatArrayOf(
-            a * x0 + b * x1 + c * x2 + d * x3,
-            a * y0 + b * y1 + c * y2 + d * y3
-        )
-    }
-
-    /** 贝塞尔切线法线（单位向量，返回 [nx, ny]） */
-    private fun normalAt(
-        x0: Float, y0: Float, x1: Float, y1: Float,
-        x2: Float, y2: Float, x3: Float, y3: Float, t: Float
-    ): FloatArray {
-        val mt = 1f - t
-        val dx = 3f * mt * mt * (x1 - x0) + 6f * mt * t * (x2 - x1) + 3f * t * t * (x3 - x2)
-        val dy = 3f * mt * mt * (y1 - y0) + 6f * mt * t * (y2 - y1) + 3f * t * t * (y3 - y2)
-        val len = hypot(dx, dy).coerceAtLeast(0.0001f)
-        return floatArrayOf(-dy / len, dx / len)
-    }
-
-    /** 边缘光颜色：跟随连接状态，但都压得比较淡，避免抢画面 */
-    private fun rimColor(): Int = when (mood) {
-        MOOD_CONNECTED -> 0x9FF1D8 // 青绿
-        MOOD_TRANSFER -> 0xD9C4FF // 淡紫
-        MOOD_ERROR -> 0xFFC0B4 // 暖红
-        else -> 0xC9DAFF          // 冷蓝
     }
 
     private fun drawHearts(canvas: Canvas) {
@@ -513,16 +615,39 @@ class CoverLiveView @JvmOverloads constructor(
         }
     }
 
+    /** 底部压暗 + 四角暗角（暗角缓慢呼吸，画面不会「死平」） */
+    private fun drawFinish(canvas: Canvas, w: Float, h: Float, t: Float) {
+        val vg = vignetteShader
+        if (vg != null) {
+            vignettePaint.shader = vg
+            vignettePaint.alpha = (206 + 34 * sin(t * 0.23f)).toInt().coerceIn(0, 255)
+            canvas.drawRect(0f, 0f, w, h, vignettePaint)
+        }
+        val sc = scrimShader
+        if (sc != null) {
+            scrimPaint.shader = sc
+            canvas.drawRect(0f, 0f, w, h, scrimPaint)
+        }
+    }
+
+    /** 边缘光颜色：跟随连接状态，但都压得比较淡，避免抢画面 */
+    private fun rimColor(): Int = when (mood) {
+        MOOD_CONNECTED -> 0x9FF1D8 // 青绿
+        MOOD_TRANSFER -> 0xD9C4FF // 淡紫
+        MOOD_ERROR -> 0xFFC0B4 // 暖红
+        else -> 0xC9DAFF          // 冷蓝
+    }
+
     /** 用两个圆 + 一个三角拼一颗心，比 Path 里手写贝塞尔省事也够可爱 */
     private fun drawHeart(canvas: Canvas, cx: Float, cy: Float, size: Float) {
         val r = size * 0.5f
         canvas.drawCircle(cx - r * 0.55f, cy - r * 0.25f, r * 0.62f, heartPaint)
         canvas.drawCircle(cx + r * 0.55f, cy - r * 0.25f, r * 0.62f, heartPaint)
-        hairPath.reset()
-        hairPath.moveTo(cx - r * 1.05f, cy)
-        hairPath.lineTo(cx + r * 1.05f, cy)
-        hairPath.lineTo(cx, cy + r * 1.45f)
-        hairPath.close()
-        canvas.drawPath(hairPath, heartPaint)
+        tmpPath.reset()
+        tmpPath.moveTo(cx - r * 1.05f, cy)
+        tmpPath.lineTo(cx + r * 1.05f, cy)
+        tmpPath.lineTo(cx, cy + r * 1.45f)
+        tmpPath.close()
+        canvas.drawPath(tmpPath, heartPaint)
     }
 }

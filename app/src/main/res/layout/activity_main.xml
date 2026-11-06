@@ -19,7 +19,7 @@
         android:layout_height="match_parent"
         android:orientation="vertical">
 
-        <!-- 封面：动态插画（呼吸推移 + 发梢飘动 + 光束浮尘） -->
+        <!-- 封面：头发网格形变 + 柔光 / 光斑 / 光束 / 浮尘（纯装饰，不拦截触摸） -->
         <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="168dp">

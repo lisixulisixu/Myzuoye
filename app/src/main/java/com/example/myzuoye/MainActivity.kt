@@ -86,7 +86,7 @@ class MainActivity : AppCompatActivity() {
     /** 连接四步进度（发现 → 协商 → 组网 → 通道） */
     private lateinit var steps: ConnectionStepsView
 
-    /** 封面动态插画：发梢飘动、光束浮尘、传输完成时爱心迸发 */
+    /** 封面动态插画：长发网格形变、柔光光斑、传输完成时爱心迸发 */
     private lateinit var coverLive: CoverLiveView
 
     /** 流动背景：连接状态变化时整体染一层状态色 */
