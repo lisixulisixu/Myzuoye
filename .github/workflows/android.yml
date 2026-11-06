@@ -17,15 +17,35 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+          cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # GitHub 的 ubuntu 镜像本来就自带 Android SDK（ANDROID_SDK_ROOT 已设好），
+      # 所以这里不再用第三方 action 去「安装 SDK」——之前 3 次 CI 全部挂在
+      # android-actions/setup-android@v3 这一步（16 秒就退出，连 gradle 都没跑起来）。
+      # 缺什么让 AGP 自己补：接受许可后，构建时会自动下载缺失的 platform / build-tools。
+      - name: Prepare Android SDK
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "sdk.dir=$SDK" > local.properties
+          echo "SDK 目录：$SDK"
+          ls "$SDK/platforms" || true
 
-      # 只跑纯 JVM 单测（协议编解码、天气码映射），不需要模拟器，几十秒就能出结果
+          SDKMGR="$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1 || true)"
+          if [ -n "$SDKMGR" ]; then
+            echo "sdkmanager: $SDKMGR"
+            yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+          else
+            echo "没找到 sdkmanager，交给 AGP 自己补齐"
+          fi
+          chmod +x gradlew
+
+      # 只跑纯 JVM 单测（协议编解码、天气码映射、头发形变场），不需要模拟器
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest --stacktrace
 
-      # 编译一遍确保代码能过；Lint 只报错不阻断（历史遗留的 warning 太多）
+      # 编译一遍确保代码能过
       - name: Assemble debug
         run: ./gradlew :app:assembleDebug --stacktrace
 
