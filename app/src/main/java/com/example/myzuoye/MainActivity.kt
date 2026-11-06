@@ -13,8 +13,10 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.provider.Settings
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -40,7 +42,11 @@ import com.example.myzuoye.transfer.SendItem
 import com.example.myzuoye.transfer.SendQueue
 import com.example.myzuoye.transfer.TransferManager
 import com.example.myzuoye.ui.AppDialog
+import com.example.myzuoye.ui.ConnectionStepsView
+import com.example.myzuoye.ui.CoverLiveView
 import com.example.myzuoye.ui.DeviceAdapter
+import com.example.myzuoye.ui.FlowBackgroundView
+import com.example.myzuoye.ui.attachPressFeedback
 import com.example.myzuoye.ui.MascotView
 import com.example.myzuoye.util.Formatters
 import com.example.myzuoye.weather.WeatherRepository
@@ -70,11 +76,35 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvPeerHint: TextView
     private lateinit var tvLog: TextView
     private lateinit var rvDevices: RecyclerView
-    private lateinit var tvDevicesEmpty: TextView
+    private lateinit var tvDevicesEmpty: View
     private lateinit var btnDiscover: Button
     private lateinit var btnCreateGroup: Button
     private lateinit var btnDisconnect: Button
     private lateinit var btnPlayGame: Button
+    private lateinit var btnEmptySearch: Button
+
+    /** 连接四步进度（发现 → 协商 → 组网 → 通道） */
+    private lateinit var steps: ConnectionStepsView
+
+    /** 封面动态插画：发梢飘动、光束浮尘、传输完成时爱心迸发 */
+    private lateinit var coverLive: CoverLiveView
+
+    /** 流动背景：连接状态变化时整体染一层状态色 */
+    private lateinit var flowBackground: FlowBackgroundView
+
+    /** 内联提示条（替代 Toast） */
+    private lateinit var tvHint: TextView
+    private lateinit var tvLogToggle: TextView
+    private lateinit var logHeader: View
+
+    /** 日志区是否收起 */
+    private var logCollapsed = false
+
+    /** 当前连接进行到第几步（失败时保留现场，方便把红点画在正确的位置） */
+    private var currentStep = ConnectionStepsView.STEP_DISCOVER
+
+    /** 最近一次通道状态：搜索循环会周期性调用 startDiscovery，不能在已连接时把进度打回第一步 */
+    private var channelState = TransferManager.State.IDLE
 
     private lateinit var tvChannelState: TextView
     private lateinit var tvChat: TextView
@@ -107,6 +137,9 @@ class MainActivity : AppCompatActivity() {
 
     /** 「改用局域网直连」的提示只给一次 */
     private var p2pHintShown = false
+
+    /** 最近一次主动连接的设备名，连上后写到小组件上显示「已连接 XXX」 */
+    private var connectingPeerName = ""
 
     /** 传输期间弹出的小游戏窗口 */
     private var transferGame: TransferGame? = null
@@ -288,6 +321,9 @@ class MainActivity : AppCompatActivity() {
         btnPickFile.setOnClickListener { pickFile() }
         btnViewFiles.setOnClickListener {
             startActivity(Intent(this, ReceivedFilesActivity::class.java))
+            // 上滑淡入，和圆角卡片的风格一致，不用系统默认的横向滑动
+            @Suppress("DEPRECATION")
+            overridePendingTransition(R.anim.activity_in_bottom, android.R.anim.fade_out)
         }
         btnCancelTransfer.setOnClickListener {
             // 先把队列清掉，否则取消完当前这个，队列会立刻接着发下一个
@@ -300,6 +336,8 @@ class MainActivity : AppCompatActivity() {
             updateCancelButton()
         }
         btnPlayGame.setOnClickListener { openGameForFun() }
+        findViewById<View>(R.id.btnTools).setOnClickListener { showToolsMenu() }
+        btnEmptySearch.setOnClickListener { startDiscovery(force = true) }
         // 长按「玩游戏」：恢复「传输时询问要不要玩」的提示
         btnPlayGame.setOnLongClickListener {
             restoreGamePrompt()
@@ -329,7 +367,9 @@ class MainActivity : AppCompatActivity() {
         TransferManager.onReceiveProgress = { progress, speed ->
             renderReceiveProgress(progress, speed)
             // 小组件：接收中显示文件名（同一文件的高频进度回调会被去重，不会反复刷）
-            WidgetState.setTransferring(this, true, TransferManager.receivingFileName)
+            WidgetState.setTransferring(
+                this, true, TransferManager.receivingFileName, (progress * 100).toInt()
+            )
         }
         TransferManager.onReceiveDone = { path ->
             renderReceiveDone(path)
@@ -339,7 +379,7 @@ class MainActivity : AppCompatActivity() {
         TransferManager.onSendProgress = { progress, speed ->
             renderSendProgress(progress, speed)
             transferGame?.onProgress(pendingName, progress)
-            WidgetState.setTransferring(this, true, pendingName)
+            WidgetState.setTransferring(this, true, pendingName, (progress * 100).toInt())
         }
         TransferManager.onSendDone = { ok ->
             renderSendDone(ok)
@@ -417,12 +457,19 @@ class MainActivity : AppCompatActivity() {
         tvRoleInfo = findViewById(R.id.tvRoleInfo)
         tvPeerHint = findViewById(R.id.tvPeerHint)
         tvLog = findViewById(R.id.tvLog)
+        tvLogToggle = findViewById(R.id.tvLogToggle)
+        logHeader = findViewById(R.id.logHeader)
+        tvHint = findViewById(R.id.tvHint)
+        steps = findViewById(R.id.tvSteps)
+        coverLive = findViewById(R.id.coverLive)
+        flowBackground = findViewById(R.id.flowBackground)
         rvDevices = findViewById(R.id.rvDevices)
         tvDevicesEmpty = findViewById(R.id.tvDevicesEmpty)
         btnDiscover = findViewById(R.id.btnDiscover)
         btnCreateGroup = findViewById(R.id.btnCreateGroup)
         btnDisconnect = findViewById(R.id.btnDisconnect)
         btnPlayGame = findViewById(R.id.btnPlayGame)
+        btnEmptySearch = findViewById(R.id.btnEmptySearch)
 
         tvChannelState = findViewById(R.id.tvChannelState)
         tvChat = findViewById(R.id.tvChat)
@@ -438,11 +485,137 @@ class MainActivity : AppCompatActivity() {
 
         mascot = findViewById(R.id.mascot)
 
-        // 长按日志区：导出 / 清空。真机出问题时不用连电脑也能把日志取出来
+        // 所有按钮统一「按下缩放 + 轻触觉反馈」，比只有涟漪更有实感
+        listOf(
+            btnDiscover, btnCreateGroup, btnDisconnect, btnPlayGame,
+            btnPickFile, btnViewFiles, btnSend, btnEmptySearch
+        ).forEach { it.attachPressFeedback() }
+
+        // 回车直接发送：聊天这种高频输入不该逼人抬手去点按钮
+        etMessage.setOnEditorActionListener { _, actionId, event ->
+            val imeSend = actionId == EditorInfo.IME_ACTION_SEND
+            val enter = event?.keyCode == KeyEvent.KEYCODE_ENTER &&
+                event.action == KeyEvent.ACTION_DOWN
+            if (imeSend || enter) {
+                sendMessage()
+                true
+            } else {
+                false
+            }
+        }
+
+        // 日志区可折叠：默认展开，收起后只留一行标题
+        logCollapsed = prefs().getBoolean(KEY_LOG_COLLAPSED, false)
+        applyLogCollapsed(logCollapsed, animate = false)
+        logHeader.setOnClickListener { applyLogCollapsed(!logCollapsed) }
+
+        // 长按日志内容：导出 / 清空。真机出问题时不用连电脑也能把日志取出来
         tvLog.setOnLongClickListener {
             showLogMenu()
             true
         }
+    }
+
+    /**
+     * 折叠 / 展开诊断日志。
+     *
+     * 小屏上 76dp 的日志区长期占位很浪费，但排障时又离不开它，
+     * 所以做成「标题常驻、内容可收」，并把选择记进偏好。
+     */
+    private fun applyLogCollapsed(collapsed: Boolean, animate: Boolean = true) {
+        logCollapsed = collapsed
+        tvLogToggle.setText(if (collapsed) R.string.log_expand else R.string.log_collapse)
+        prefs().edit().putBoolean(KEY_LOG_COLLAPSED, collapsed).apply()
+
+        tvLog.animate().cancel()
+        if (collapsed) {
+            if (!animate) {
+                tvLog.visibility = View.GONE
+                return
+            }
+            tvLog.animate().alpha(0f).setDuration(140L).withEndAction {
+                if (logCollapsed) tvLog.visibility = View.GONE
+            }.start()
+        } else {
+            tvLog.visibility = View.VISIBLE
+            if (animate) {
+                tvLog.alpha = 0f
+                tvLog.animate().alpha(1f).setDuration(180L).start()
+            } else {
+                tvLog.alpha = 1f
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ 内联提示
+
+    private enum class HintKind { INFO, SUCCESS, ERROR }
+
+    private val hintHide = Runnable {
+        tvHint.animate().alpha(0f).translationY(10f * resources.displayMetrics.density)
+            .setDuration(160L)
+            .withEndAction { tvHint.visibility = View.GONE }
+            .start()
+    }
+
+    /**
+     * 内联提示条。
+     *
+     * 替换系统 Toast：Toast 飘在屏幕最下方、样式不可控、连续弹出还会排队，
+     * 而这里贴着页面显示、带状态配色，连续触发时直接替换文案不会堆积。
+     */
+    private fun showHint(message: String, kind: HintKind = HintKind.INFO) {
+        if (message.isBlank() || isFinishing) return
+        tvHint.text = message
+        val tint = when (kind) {
+            HintKind.SUCCESS -> 0xFF17372A.toInt()
+            HintKind.ERROR -> 0xFF3A1D24.toInt()
+            HintKind.INFO -> 0xFF1B2436.toInt()
+        }
+        tvHint.backgroundTintList = android.content.res.ColorStateList.valueOf(tint)
+
+        uiHandler.removeCallbacks(hintHide)
+        tvHint.visibility = View.VISIBLE
+        tvHint.animate().cancel()
+        tvHint.alpha = 0f
+        tvHint.translationY = 12f * resources.displayMetrics.density
+        tvHint.animate().alpha(1f).translationY(0f).setDuration(170L).start()
+        uiHandler.postDelayed(hintHide, 2600L)
+    }
+
+    // ------------------------------------------------------------------ 更多操作
+
+    /** 封面右上角「⋮」：把只有长按才知道的功能集中到一处，顺便补一份手势说明 */
+    private fun showToolsMenu() {
+        val items = arrayOf(
+            getString(R.string.lan_direct),
+            getString(R.string.log_export),
+            getString(R.string.tools_gestures),
+            getString(R.string.log_clear)
+        )
+        AppDialog.builder(this)
+            .setTitle(R.string.tools_title)
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> showLanDirectDialog()
+                    1 -> exportLog()
+                    2 -> showGesturesDialog()
+                    else -> {
+                        TransferManager.clearHistory()
+                        renderChat()
+                        showHint("已清空聊天记录")
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun showGesturesDialog() {
+        AppDialog.builder(this)
+            .setTitle(R.string.tools_gestures)
+            .setMessage(R.string.tools_gestures_body)
+            .setPositiveButton(R.string.dialog_ok, null)
+            .show()
     }
 
     /**
@@ -659,7 +832,7 @@ class MainActivity : AppCompatActivity() {
                     )
                 )
             }
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(R.string.dialog_cancel, null)
             .show()
     }
 
@@ -694,6 +867,10 @@ class MainActivity : AppCompatActivity() {
         searching = true
 
         tvP2pState.setText(R.string.p2p_state_searching)
+        // 已经连上时，搜索循环（每十几秒一次）不能把四步进度重置回「发现」
+        if (channelState != TransferManager.State.CONNECTED) {
+            updateStep(ConnectionStepsView.STEP_DISCOVER)
+        }
         controller.startDiscovery()
     }
 
@@ -708,6 +885,8 @@ class MainActivity : AppCompatActivity() {
         log("正在连接 ${displayName(device)}（${device.deviceAddress}）")
         // 立刻在列表上标出“连接中”，避免用户重复点击同一条
         adapter.setConnecting(device.deviceAddress)
+        connectingPeerName = displayName(device)
+        updateStep(ConnectionStepsView.STEP_NEGOTIATE)
         controller.connect(device)
     }
 
@@ -725,6 +904,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         tvP2pState.setText(R.string.p2p_state_connected)
+        updateStep(ConnectionStepsView.STEP_CHANNEL)
         tvRoleInfo.text = getString(R.string.role_info, role, groupOwnerIp)
         log("连接成功：$role，组主地址 $groupOwnerIp")
 
@@ -887,7 +1067,7 @@ class MainActivity : AppCompatActivity() {
         AppDialog.builder(this)
             .setTitle(R.string.channel_debug_connect)
             .setView(input)
-            .setPositiveButton(android.R.string.ok) { _, _ ->
+            .setPositiveButton(R.string.dialog_connect) { _, _ ->
                 val text = input.text.toString().trim()
                 if (text.isEmpty()) return@setPositiveButton
                 val (host, port) = parseHostPort(text)
@@ -898,7 +1078,7 @@ class MainActivity : AppCompatActivity() {
                 log("调试：连接 $host:$port")
                 TransferManager.connect(host, port)
             }
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(R.string.dialog_cancel, null)
             .show()
     }
 
@@ -921,7 +1101,14 @@ class MainActivity : AppCompatActivity() {
         tvDevicesEmpty.visibility = if (adapter.itemCount == 0) View.VISIBLE else View.GONE
     }
 
+    /** 更新四步进度，同时记住当前位置（失败时要靠它把红点画对地方） */
+    private fun updateStep(step: Int, failed: Boolean = false) {
+        currentStep = step.coerceAtMost(ConnectionStepsView.STEP_CHANNEL)
+        steps.setProgress(step, failed)
+    }
+
     private fun renderChannelState(state: TransferManager.State, message: String) {
+        channelState = state
         if (message.isNotBlank()) log(message)
 
         tvChannelState.setText(
@@ -934,6 +1121,40 @@ class MainActivity : AppCompatActivity() {
             }
         )
         btnSend.isEnabled = state == TransferManager.State.CONNECTED
+
+        when (state) {
+            TransferManager.State.IDLE -> {
+                updateStep(ConnectionStepsView.STEP_DISCOVER)
+                coverLive.setMood(CoverLiveView.MOOD_IDLE)
+                flowBackground.setAccent(COLOR_ACCENT_IDLE, 0.14f)
+            }
+
+            TransferManager.State.CONNECTING -> {
+                updateStep(ConnectionStepsView.STEP_NEGOTIATE)
+                flowBackground.setAccent(COLOR_ACCENT_IDLE, 0.22f)
+            }
+
+            TransferManager.State.LISTENING -> {
+                updateStep(ConnectionStepsView.STEP_CHANNEL)
+                flowBackground.setAccent(COLOR_ACCENT_IDLE, 0.20f)
+            }
+
+            TransferManager.State.CONNECTED -> {
+                updateStep(ConnectionStepsView.STEP_DONE)
+                coverLive.setMood(CoverLiveView.MOOD_CONNECTED)
+                flowBackground.setAccent(COLOR_ACCENT_ONLINE, 0.18f)
+                if (connectingPeerName.isNotBlank()) {
+                    WidgetState.setPeer(this, connectingPeerName)
+                }
+            }
+
+            TransferManager.State.ERROR -> {
+                // 保留现场：把红点画在卡住的那一步上，而不是从头再来一遍
+                steps.setProgress(currentStep, failed = true)
+                coverLive.setMood(CoverLiveView.MOOD_ERROR)
+                flowBackground.setAccent(COLOR_ACCENT_ERROR, 0.22f)
+            }
+        }
 
         // 桌面小组件：同步连接状态（内部做了「状态没变不刷新」的判断）
         WidgetState.setConnected(this, state == TransferManager.State.CONNECTED)
@@ -1143,6 +1364,8 @@ class MainActivity : AppCompatActivity() {
         val name = TransferManager.receivingFileName.ifBlank {
             getString(R.string.transfer_unknown_file)
         }
+        coverLive.setMood(CoverLiveView.MOOD_TRANSFER)
+        flowBackground.setAccent(COLOR_ACCENT_TRANSFER, 0.26f)
         val suffix = speedSuffix(speed, TransferManager.receivingTotalBytes, progress)
         tvTransferState.text = if (suffix.isEmpty()) {
             getString(R.string.transfer_receiving, name, percent)
@@ -1155,14 +1378,23 @@ class MainActivity : AppCompatActivity() {
         pbTransfer.progress = 0
         if (path != null) {
             tvTransferState.text = getString(R.string.transfer_received_done, path)
+            coverLive.setMood(CoverLiveView.MOOD_CONNECTED)
+            flowBackground.setAccent(COLOR_ACCENT_ONLINE, 0.18f)
+            coverLive.celebrate()
+            showHint("已接收：${File(path).name}", HintKind.SUCCESS)
         } else {
             tvTransferState.text = getString(R.string.transfer_received_fail)
+            coverLive.setMood(CoverLiveView.MOOD_ERROR)
+            flowBackground.setAccent(COLOR_ACCENT_ERROR, 0.22f)
+            showHint(getString(R.string.transfer_received_fail), HintKind.ERROR)
         }
     }
 
     private fun renderSendProgress(progress: Float, speed: Long) {
         val percent = (progress * 100).toInt()
         pbTransfer.progress = percent
+        coverLive.setMood(CoverLiveView.MOOD_TRANSFER)
+        flowBackground.setAccent(COLOR_ACCENT_TRANSFER, 0.26f)
         val suffix = speedSuffix(speed, TransferManager.sendingTotalBytes, progress)
         tvTransferState.text = if (suffix.isEmpty()) {
             getString(R.string.transfer_sending, pendingName, percent)
@@ -1201,8 +1433,23 @@ class MainActivity : AppCompatActivity() {
                 tvTransferState.text = getString(R.string.transfer_cancelled)
             }
 
-            ok -> tvTransferState.text = getString(R.string.transfer_sent_done, pendingName)
-            else -> tvTransferState.text = getString(R.string.transfer_sent_fail)
+            ok -> {
+                tvTransferState.text = getString(R.string.transfer_sent_done, pendingName)
+                coverLive.setMood(CoverLiveView.MOOD_CONNECTED)
+                flowBackground.setAccent(COLOR_ACCENT_ONLINE, 0.18f)
+                coverLive.celebrate()
+                // 队列里还有文件时不弹提示，避免连续发送时提示条一直闪
+                if (sendQueue.pendingCount == 0) {
+                    showHint(getString(R.string.transfer_sent_done, pendingName), HintKind.SUCCESS)
+                }
+            }
+
+            else -> {
+                tvTransferState.text = getString(R.string.transfer_sent_fail)
+                coverLive.setMood(CoverLiveView.MOOD_ERROR)
+                flowBackground.setAccent(COLOR_ACCENT_ERROR, 0.22f)
+                showHint(getString(R.string.transfer_sent_fail), HintKind.ERROR)
+            }
         }
         updateCancelButton()
     }
@@ -1218,8 +1465,10 @@ class MainActivity : AppCompatActivity() {
     private fun displayName(device: WifiP2pDevice): String =
         device.deviceName.ifBlank { device.deviceAddress.ifBlank { "未知设备" } }
 
+    /** 统一走内联提示条；真机上离屏时（比如正在跳转）退回 Toast 保证不丢信息 */
     private fun toast(message: String) {
-        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+        if (isFinishing || tvHint == null) return
+        showHint(message)
     }
 
     private fun log(message: String) {
@@ -1295,6 +1544,15 @@ class MainActivity : AppCompatActivity() {
         /** SharedPreferences 文件名与「传输时不玩小游戏」偏好的 key */
         const val PREFS_NAME = "myzuoye_prefs"
         const val KEY_GAME_PROMPT_DISABLED = "game_prompt_disabled"
+
+        /** 诊断日志是否收起 */
+        const val KEY_LOG_COLLAPSED = "log_collapsed"
+
+        // 背景状态色：冷蓝待连接 / 青绿已连接 / 紫传输中 / 红失败
+        const val COLOR_ACCENT_IDLE = 0xFF3B82F6.toInt()
+        const val COLOR_ACCENT_ONLINE = 0xFF34C759.toInt()
+        const val COLOR_ACCENT_TRANSFER = 0xFFA855F7.toInt()
+        const val COLOR_ACCENT_ERROR = 0xFFE06C75.toInt()
 
         /** 「要不要给小组件开放大致位置」是否已经问过（只问一次） */
         const val KEY_WEATHER_LOC_ASKED = "weather_location_asked"

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 列表行的点击涟漪：深色背景下系统默认涟漪几乎看不见，这里给一个更亮的水波纹 -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="#26FFFFFF" />

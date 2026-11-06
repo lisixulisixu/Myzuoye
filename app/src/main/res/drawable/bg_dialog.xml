@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 深色圆角对话框底板：和整体夜空风格一致，避免弹窗突然一片白 -->
+<!--
+  深色圆角对话框底板。
+  必须是不透明色（FF 开头）：半透明时底下的按钮会透上来，
+  看起来像「弹窗内容被穿透」，非常脏。
+-->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <solid android:color="#F2141B2B" />
+    <solid android:color="#FF141B2B" />
     <stroke
         android:width="1dp"
         android:color="#33FFFFFF" />

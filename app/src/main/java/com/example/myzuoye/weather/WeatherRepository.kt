@@ -45,6 +45,13 @@ object WeatherRepository {
     private const val KEY_NO_PERMISSION = "no_permission"
     private const val KEY_ERROR = "error"
 
+    // 以下是为了让小组件一屏能提供更多信息（体感、今日高低温、降水概率），
+    // 与主温度同一次请求返回，不额外发网络请求
+    private const val KEY_APPARENT = "apparent"
+    private const val KEY_TEMP_MAX = "temp_max"
+    private const val KEY_TEMP_MIN = "temp_min"
+    private const val KEY_PRECIP = "precip"
+
     /** 「没取到温度」的哨兵值（SharedPreferences 没有 putNull） */
     private const val TEMP_UNKNOWN = Int.MIN_VALUE
 
@@ -63,7 +70,14 @@ object WeatherRepository {
         val isDay: Boolean,
         val updatedAt: Long,
         val permissionMissing: Boolean,
-        val error: String?
+        val error: String?,
+        /** 体感温度；接口没给时为 null */
+        val apparentC: Int? = null,
+        /** 今日最高 / 最低温 */
+        val tempMaxC: Int? = null,
+        val tempMinC: Int? = null,
+        /** 今日最大降水概率（0..100） */
+        val precipProb: Int? = null
     ) {
         val hasData: Boolean get() = tempC != null
 
@@ -99,7 +113,11 @@ object WeatherRepository {
             isDay = p.getBoolean(KEY_IS_DAY, true),
             updatedAt = p.getLong(KEY_UPDATED_AT, 0L),
             permissionMissing = p.getBoolean(KEY_NO_PERMISSION, false),
-            error = p.getString(KEY_ERROR, null)
+            error = p.getString(KEY_ERROR, null),
+            apparentC = p.getInt(KEY_APPARENT, TEMP_UNKNOWN).let { if (it == TEMP_UNKNOWN) null else it },
+            tempMaxC = p.getInt(KEY_TEMP_MAX, TEMP_UNKNOWN).let { if (it == TEMP_UNKNOWN) null else it },
+            tempMinC = p.getInt(KEY_TEMP_MIN, TEMP_UNKNOWN).let { if (it == TEMP_UNKNOWN) null else it },
+            precipProb = p.getInt(KEY_PRECIP, TEMP_UNKNOWN).let { if (it == TEMP_UNKNOWN) null else it }
         )
     }
 
@@ -112,6 +130,10 @@ object WeatherRepository {
             .putLong(KEY_UPDATED_AT, snapshot.updatedAt)
             .putBoolean(KEY_NO_PERMISSION, snapshot.permissionMissing)
             .putString(KEY_ERROR, snapshot.error)
+            .putInt(KEY_APPARENT, snapshot.apparentC ?: TEMP_UNKNOWN)
+            .putInt(KEY_TEMP_MAX, snapshot.tempMaxC ?: TEMP_UNKNOWN)
+            .putInt(KEY_TEMP_MIN, snapshot.tempMinC ?: TEMP_UNKNOWN)
+            .putInt(KEY_PRECIP, snapshot.precipProb ?: TEMP_UNKNOWN)
             .apply()
     }
 
@@ -226,7 +248,11 @@ object WeatherRepository {
                 isDay = result.isDay,
                 updatedAt = System.currentTimeMillis(),
                 permissionMissing = false,
-                error = null
+                error = null,
+                apparentC = result.apparentC,
+                tempMaxC = result.tempMaxC,
+                tempMinC = result.tempMinC,
+                precipProb = result.precipProb
             )
         )
     }
@@ -287,21 +313,47 @@ object WeatherRepository {
     private class WeatherResult(
         val tempC: Int,
         val condition: WeatherCondition,
-        val isDay: Boolean
+        val isDay: Boolean,
+        val apparentC: Int?,
+        val tempMaxC: Int?,
+        val tempMinC: Int?,
+        val precipProb: Int?
     )
 
     private fun requestWeather(lat: Double, lon: Double): WeatherResult? {
+        // 一次请求同时拿到实况与今日概况：多要三个字段不会增加额外请求，
+        // 但小组件上就能多显示「体感 / 高低温 / 降水概率」
         val url = "https://api.open-meteo.com/v1/forecast" +
             "?latitude=%.4f&longitude=%.4f".format(lat, lon) +
-            "&current=temperature_2m,weather_code,is_day&timezone=auto&forecast_days=1"
+            "&current=temperature_2m,apparent_temperature,weather_code,is_day" +
+            "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
+            "&timezone=auto&forecast_days=1"
         val body = httpGet(url) ?: return null
-        val current = runCatching { JSONObject(body).optJSONObject("current") }.getOrNull() ?: return null
+        val json = runCatching { JSONObject(body) }.getOrNull() ?: return null
+        val current = json.optJSONObject("current") ?: return null
         val temp = current.optDouble("temperature_2m", Double.NaN)
         if (temp.isNaN()) return null
+
+        // daily 是数组，只有一天，取下标 0
+        val daily = json.optJSONObject("daily")
+        fun firstOf(name: String): Double? {
+            val arr = daily?.optJSONArray(name) ?: return null
+            if (arr.length() == 0) return null
+            val v = arr.optDouble(0, Double.NaN)
+            return if (v.isNaN()) null else v
+        }
+
         return WeatherResult(
             tempC = Math.round(temp).toInt(),
             condition = WeatherCodes.of(current.optInt("weather_code", 3)),
-            isDay = current.optInt("is_day", 1) == 1
+            isDay = current.optInt("is_day", 1) == 1,
+            apparentC = current.optDouble("apparent_temperature", Double.NaN)
+                .takeIf { !it.isNaN() }?.let { Math.round(it).toInt() },
+            tempMaxC = firstOf("temperature_2m_max")?.let { Math.round(it).toInt() },
+            tempMinC = firstOf("temperature_2m_min")?.let { Math.round(it).toInt() },
+            precipProb = firstOf("precipitation_probability_max")?.let {
+                Math.round(it).toInt().coerceIn(0, 100)
+            }
         )
     }
 

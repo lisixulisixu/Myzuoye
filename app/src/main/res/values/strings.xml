@@ -84,6 +84,19 @@
     <string name="lan_no_ip">当前没有局域网地址，请先连接 Wi-Fi</string>
     <string name="lan_listen_started">已在 %1$s 监听</string>
     <string name="p2p_failed_hint">Wi-Fi Direct 连接失败，可长按「文本通道」改用局域网直连</string>
+    <string name="devices_empty_title">还没有发现附近设备</string>
+    <string name="devices_empty_action">开始搜索</string>
+    <string name="files_back">返回</string>
+    <string name="dialog_ok">好的</string>
+    <string name="dialog_cancel">取消</string>
+    <string name="dialog_connect">连接</string>
+    <string name="log_title">诊断日志</string>
+    <string name="log_expand">展开</string>
+    <string name="log_collapse">收起</string>
+    <string name="tools_desc">更多操作</string>
+    <string name="tools_title">更多操作</string>
+    <string name="tools_gestures">手势与快捷操作说明</string>
+    <string name="tools_gestures_body">· 点封面右下角的女仆：她会说话，也会换表情\n· 长按「文本通道」：局域网直连、导出日志\n· 长按「玩游戏」：恢复「传输前询问是否玩」\n· 长按底部日志：导出或清空日志\n· 传输中可点「取消」清空发送队列</string>
     <string name="devices_empty_hint">还没有发现设备\n让另一台手机也打开本应用并点「搜索设备」\n连不上时可长按「文本通道」改用局域网直连</string>
 
     <!-- 应用内查看已接收文件 -->
@@ -144,6 +157,12 @@
     <string name="widget_status_disconnected">未连接</string>
     <string name="widget_status_sending">传输中</string>
     <string name="widget_status_receiving">接收中</string>
+    <string name="widget_status_connected_peer">已连接 %1$s</string>
+    <string name="widget_status_waiting_peer">等待连接</string>
+    <string name="widget_status_sending_short">发送中 %1$d%%</string>
+    <string name="widget_status_receiving_short">接收中 %1$d%%</string>
+    <string name="widget_condition_detail">%1$s · %2$d°/%3$d°</string>
+    <string name="widget_precip">降水 %1$d%%</string>
     <string name="widget_received_zero">已接收 0 个</string>
     <string name="widget_received">已接收 %1$d 个</string>
     <string name="widget_receiving">正在接收：%1$s</string>

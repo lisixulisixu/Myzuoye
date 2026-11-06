@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 设备列表空状态图标：一台带搜索波纹的设备 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="64dp"
+    android:height="64dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+
+    <!-- 搜索波纹 -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M32,32m-20,0a20,20 0,1 1,40 0a20,20 0,1 1,-40 0"
+        android:strokeColor="#337CF0FF"
+        android:strokeWidth="1.6" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M32,32m-13,0a13,13 0,1 1,26 0a13,13 0,1 1,-26 0"
+        android:strokeColor="#559BE0FF"
+        android:strokeWidth="1.6" />
+
+    <!-- 中间的设备 -->
+    <path
+        android:fillColor="#C7D8F5"
+        android:pathData="M27,20h10a2,2 0,0 1,2 2v20a2,2 0,0 1,-2 2h-10a2,2 0,0 1,-2 -2v-20a2,2 0,0 1,2 -2z" />
+    <path
+        android:fillColor="#16203A"
+        android:pathData="M28.5,23h7v14h-7z" />
+    <path
+        android:fillColor="#16203A"
+        android:pathData="M31,38.5h2a1,1 0,0 1,0 2h-2a1,1 0,0 1,0 -2z" />
+</vector>

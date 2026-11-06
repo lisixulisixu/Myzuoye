@@ -96,7 +96,8 @@ class TransferGame(private val context: Context) {
         d.setOnCancelListener { /* 什么都不做，由 dismiss 统一处理 */ }
 
         val window = d.window
-        window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        // 不透明底板：以前这里设成透明，弹窗会「透」出底下的主界面，看起来很脏
+        window?.setBackgroundDrawableResource(R.drawable.bg_dialog)
         window?.setLayout(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT
@@ -104,6 +105,15 @@ class TransferGame(private val context: Context) {
 
         d.setCanceledOnTouchOutside(false)
         d.show()
+
+        // 全屏弹窗要自己避开状态栏/导航栏，否则①区会压到系统状态栏上
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(view) { v, insets ->
+            val bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            v.setPadding(bars.left + 12, bars.top + 12, bars.right + 12, bars.bottom + 12)
+            insets
+        }
+        // 对话框是独立窗口，必须主动请求一次，否则监听器要等到下一次布局才收到 insets
+        view.requestApplyInsets()
 
         // 开始游戏
         gameView?.start()

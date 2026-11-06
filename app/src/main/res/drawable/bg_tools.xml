@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 封面右上角的「更多」按钮：半透明圆形，压在图片上也能看清图标 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="#660A101C" />
+    <stroke
+        android:width="1dp"
+        android:color="#40FFFFFF" />
+</shape>

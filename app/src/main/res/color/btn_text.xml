@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 主按钮文字：禁用时同步变淡，和背景的禁用态配套 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_enabled="false" android:color="#5CFFFFFF" />
+    <item android:color="@color/white" />
+</selector>

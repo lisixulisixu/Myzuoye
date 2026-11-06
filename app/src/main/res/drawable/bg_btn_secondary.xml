@@ -2,15 +2,25 @@
 <!--
   次按钮：半透明玻璃 + 细描边。
   和主按钮（实心渐变）拉开层次，避免一屏全是高饱和色块。
+  禁用态压到几乎和面板同色，只留一点描边，明确「现在按不了」。
 -->
 <ripple xmlns:android="http://schemas.android.com/apk/res/android"
-    android:color="#33FFFFFF">
+    android:color="#22FFFFFF">
     <item>
         <selector>
+            <item android:state_enabled="false">
+                <shape android:shape="rectangle">
+                    <solid android:color="#0AFFFFFF" />
+                    <stroke
+                        android:width="1dp"
+                        android:color="#14FFFFFF" />
+                    <corners android:radius="14dp" />
+                </shape>
+            </item>
             <item android:state_pressed="true">
                 <shape android:shape="rectangle">
                     <solid android:color="#33FFFFFF" />
-                    <corners android:radius="12dp" />
+                    <corners android:radius="14dp" />
                 </shape>
             </item>
             <item android:state_hovered="true">
@@ -19,7 +29,7 @@
                     <stroke
                         android:width="1dp"
                         android:color="#80FFFFFF" />
-                    <corners android:radius="12dp" />
+                    <corners android:radius="14dp" />
                 </shape>
             </item>
             <item>
@@ -28,7 +38,7 @@
                     <stroke
                         android:width="1dp"
                         android:color="#40FFFFFF" />
-                    <corners android:radius="12dp" />
+                    <corners android:radius="14dp" />
                 </shape>
             </item>
         </selector>

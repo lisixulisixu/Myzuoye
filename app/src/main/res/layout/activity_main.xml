@@ -10,6 +10,7 @@
 
     <!-- 流动背景：渐变打底 + 漂移柔光，纯装饰不拦截触摸 -->
     <com.example.myzuoye.ui.FlowBackgroundView
+        android:id="@+id/flowBackground"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
@@ -18,22 +19,16 @@
         android:layout_height="match_parent"
         android:orientation="vertical">
 
+        <!-- 封面：动态插画（呼吸推移 + 发梢飘动 + 光束浮尘） -->
         <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="168dp">
 
-            <ImageView
-                android:id="@+id/ivCover"
+            <com.example.myzuoye.ui.CoverLiveView
+                android:id="@+id/coverLive"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:contentDescription="@string/photo1_name"
-                android:scaleType="centerCrop"
-                app:srcCompat="@drawable/p1" />
-
-            <!-- 封面装饰：柔和渐变 + 缓慢光斑，纯装饰不拦截触摸 -->
-            <com.example.myzuoye.ui.CoverOverlayView
-                android:layout_width="match_parent"
-                android:layout_height="match_parent" />
+                android:contentDescription="@string/photo1_name" />
 
             <!-- Q 版人物形象：封面右下角装饰，不遮挡下方交互；预留上方气泡空间 -->
             <com.example.myzuoye.ui.MascotView
@@ -41,35 +36,57 @@
                 android:layout_width="150dp"
                 android:layout_height="150dp"
                 android:layout_gravity="end|bottom"
-                android:layout_marginEnd="0dp"
-                android:layout_marginBottom="0dp"
                 android:contentDescription="@string/mascot_desc" />
+
+            <!--
+              更多操作入口：把原先只有「长按才知道」的几个功能收进菜单
+              （局域网直连 / 导出日志 / 清除记录 / 手势说明）。
+            -->
+            <TextView
+                android:id="@+id/btnTools"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_gravity="top|end"
+                android:layout_margin="10dp"
+                android:background="@drawable/bg_tools"
+                android:contentDescription="@string/tools_desc"
+                android:gravity="center"
+                android:text="⋮"
+                android:textColor="#F2F6FF"
+                android:textSize="20sp" />
         </FrameLayout>
 
+        <!-- 连接状态 + 四步进度 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:paddingHorizontal="16dp"
-            android:paddingTop="12dp">
+            android:paddingTop="10dp">
 
             <TextView
                 android:id="@+id/tvP2pState"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/p2p_state_init"
+                android:textColor="@color/text_primary"
                 android:textSize="16sp"
-                android:textStyle="bold" 
-            android:textColor="@color/text_primary"/>
+                android:textStyle="bold" />
+
+            <com.example.myzuoye.ui.ConnectionStepsView
+                android:id="@+id/tvSteps"
+                android:layout_width="match_parent"
+                android:layout_height="42dp"
+                android:layout_marginTop="4dp" />
 
             <TextView
                 android:id="@+id/tvSelfInfo"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="5dp"
+                android:layout_marginTop="2dp"
                 android:text="@string/self_unknown"
-                android:textSize="12sp" 
-            android:textColor="@color/text_secondary"/>
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
 
             <TextView
                 android:id="@+id/tvRoleInfo"
@@ -77,76 +94,87 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:text="@string/role_unknown"
-                android:textSize="12sp" 
-            android:textColor="@color/text_secondary"/>
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
         </LinearLayout>
 
+        <!--
+          操作按钮改 2×2：原来四个按钮挤一行，每个只有约 76dp 宽，
+          系统字体放大到 1.3 倍时「搜索设备」会被截断。两行两列后点击目标也更大。
+        -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
+            android:orientation="vertical"
             android:paddingHorizontal="12dp"
             android:paddingTop="8dp">
 
-            <Button
-                android:id="@+id/btnDiscover"
-                android:layout_width="0dp"
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginHorizontal="4dp"
-                android:layout_weight="1"
-                android:background="@drawable/bg_btn_primary"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:minHeight="40dp"
-                android:paddingHorizontal="4dp"
-                android:text="@string/action_discover"
-                android:textColor="@color/white"
-                android:textSize="13sp" />
+                android:orientation="horizontal">
 
-            <Button
-                android:id="@+id/btnCreateGroup"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginHorizontal="4dp"
-                android:layout_weight="1"
-                android:background="@drawable/bg_btn_primary"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:minHeight="40dp"
-                android:paddingHorizontal="4dp"
-                android:text="@string/action_create_group"
-                android:textColor="@color/white"
-                android:textSize="13sp" />
+                <Button
+                    android:id="@+id/btnDiscover"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_btn_primary"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minHeight="42dp"
+                    android:text="@string/action_discover"
+                    android:textColor="@color/btn_text"
+                    android:textSize="14sp" />
 
-            <Button
-                android:id="@+id/btnDisconnect"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginHorizontal="4dp"
-                android:layout_weight="1"
-                android:background="@drawable/bg_btn_primary"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:minHeight="40dp"
-                android:paddingHorizontal="4dp"
-                android:text="@string/action_disconnect"
-                android:textColor="@color/white"
-                android:textSize="13sp" />
+                <Button
+                    android:id="@+id/btnCreateGroup"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_btn_primary"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minHeight="42dp"
+                    android:text="@string/action_create_group"
+                    android:textColor="@color/btn_text"
+                    android:textSize="14sp" />
+            </LinearLayout>
 
-            <Button
-                android:id="@+id/btnPlayGame"
-                android:layout_width="0dp"
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginHorizontal="4dp"
-                android:layout_weight="1"
-                android:background="@drawable/bg_btn_secondary"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:minHeight="40dp"
-                android:paddingHorizontal="4dp"
-                android:text="@string/game_play"
-                android:textColor="@color/primary_light"
-                android:textSize="13sp" />
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnDisconnect"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minHeight="42dp"
+                    android:text="@string/action_disconnect"
+                    android:textColor="@color/btn_text_secondary"
+                    android:textSize="14sp" />
+
+                <Button
+                    android:id="@+id/btnPlayGame"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minHeight="42dp"
+                    android:text="@string/game_play"
+                    android:textColor="@color/btn_text_secondary"
+                    android:textSize="14sp" />
+            </LinearLayout>
         </LinearLayout>
 
         <TextView
@@ -157,12 +185,10 @@
             android:paddingTop="10dp"
             android:paddingBottom="2dp"
             android:text="@string/nearby_devices_zero"
-            android:textSize="12sp" 
-            android:textColor="@color/text_secondary"/>
+            android:textColor="@color/text_secondary"
+            android:textSize="12sp" />
 
-        <!-- 设备列表 + 空状态提示。
-             列表为空时这块区域原本是一大片纯背景，看起来像"页面没加载出来"，
-             给一句引导文案既填补了视觉空白，也告诉用户下一步该干什么。 -->
+        <!-- 设备列表 + 空状态（图标 + 主副文案 + 直接开始搜索） -->
         <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="0dp"
@@ -177,17 +203,55 @@
                 android:minHeight="72dp"
                 android:scrollbars="vertical" />
 
-            <TextView
+            <LinearLayout
                 android:id="@+id/tvDevicesEmpty"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_gravity="center"
                 android:gravity="center"
-                android:lineSpacingExtra="4dp"
-                android:paddingHorizontal="32dp"
-                android:text="@string/devices_empty_hint"
-                android:textColor="@color/text_secondary"
-                android:textSize="12sp" />
+                android:orientation="vertical"
+                android:paddingHorizontal="32dp">
+
+                <ImageView
+                    android:layout_width="56dp"
+                    android:layout_height="56dp"
+                    android:alpha="0.9"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_devices_empty" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="@string/devices_empty_title"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:gravity="center"
+                    android:lineSpacingExtra="3dp"
+                    android:text="@string/devices_empty_hint"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/btnEmptySearch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minHeight="38dp"
+                    android:minWidth="112dp"
+                    android:text="@string/devices_empty_action"
+                    android:textColor="@color/btn_text_secondary"
+                    android:textSize="13sp" />
+            </LinearLayout>
         </FrameLayout>
 
         <LinearLayout
@@ -205,9 +269,9 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/channel_idle"
+                android:textColor="@color/text_primary"
                 android:textSize="13sp"
-                android:textStyle="bold" 
-            android:textColor="@color/text_primary"/>
+                android:textStyle="bold" />
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -225,7 +289,7 @@
                     android:insetBottom="0dp"
                     android:minHeight="40dp"
                     android:text="@string/action_pick_file"
-                    android:textColor="@color/white"
+                    android:textColor="@color/btn_text"
                     android:textSize="13sp" />
 
                 <Button
@@ -238,7 +302,7 @@
                     android:insetBottom="0dp"
                     android:minHeight="40dp"
                     android:text="@string/action_view_files"
-                    android:textColor="@color/primary_light"
+                    android:textColor="@color/btn_text_secondary"
                     android:textSize="13sp" />
 
                 <ProgressBar
@@ -248,6 +312,7 @@
                     android:layout_height="6dp"
                     android:layout_marginStart="10dp"
                     android:layout_weight="1"
+                    android:contentDescription="@string/transfer_idle"
                     android:max="100"
                     android:progress="0"
                     android:progressDrawable="@drawable/bg_progress" />
@@ -256,7 +321,7 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
+                android:layout_marginTop="4dp"
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
@@ -266,8 +331,8 @@
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:text="@string/transfer_idle"
-                    android:textSize="11sp" 
-            android:textColor="@color/text_secondary"/>
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
 
                 <!-- 传输中或队列有货时才出现：一键取消当前发送并清空队列 -->
                 <TextView
@@ -279,7 +344,7 @@
                     android:paddingVertical="4dp"
                     android:text="@string/transfer_cancel"
                     android:textColor="#E06C75"
-                    android:textSize="11sp"
+                    android:textSize="12sp"
                     android:visibility="gone" />
             </LinearLayout>
 
@@ -295,8 +360,8 @@
                     android:layout_height="wrap_content"
                     android:lineSpacingExtra="2dp"
                     android:text="@string/chat_empty"
-                    android:textSize="12sp" 
-            android:textColor="@color/text_primary"/>
+                    android:textColor="@color/text_primary"
+                    android:textSize="12.5sp" />
             </ScrollView>
 
             <LinearLayout
@@ -312,6 +377,7 @@
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:hint="@string/hint_message"
+                    android:imeOptions="actionSend"
                     android:importantForAutofill="no"
                     android:inputType="text"
                     android:maxLines="1"
@@ -331,25 +397,77 @@
                     android:minHeight="40dp"
                     android:minWidth="64dp"
                     android:text="@string/action_send"
-                    android:textColor="@color/white"
+                    android:textColor="@color/btn_text"
                     android:textSize="13sp" />
             </LinearLayout>
         </LinearLayout>
 
-        <TextView
-            android:id="@+id/tvLog"
+        <!-- 诊断日志：默认展开，点标题可收起，避免小屏上一直占着 76dp -->
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="76dp"
+            android:layout_height="wrap_content"
             android:layout_marginHorizontal="12dp"
             android:layout_marginTop="8dp"
             android:layout_marginBottom="10dp"
-            android:background="@drawable/bg_log"
-            android:fontFamily="monospace"
-            android:gravity="bottom"
-            android:padding="8dp"
-            android:textColor="@color/text_secondary"
-            android:textSize="11sp" />
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:id="@+id/logHeader"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingVertical="2dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/log_title"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:id="@+id/tvLogToggle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/log_collapse"
+                    android:textColor="@color/primary_light"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvLog"
+                android:layout_width="match_parent"
+                android:layout_height="76dp"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_log"
+                android:fontFamily="monospace"
+                android:gravity="bottom"
+                android:padding="8dp"
+                android:textColor="@color/text_secondary"
+                android:textSize="11sp" />
+        </LinearLayout>
 
     </LinearLayout>
+
+    <!-- 内联提示条：比 Toast 更贴近界面，也不会挡住系统手势区 -->
+    <TextView
+        android:id="@+id/tvHint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginHorizontal="24dp"
+        android:layout_marginBottom="104dp"
+        android:alpha="0"
+        android:background="@drawable/bg_hint"
+        android:elevation="12dp"
+        android:maxWidth="420dp"
+        android:paddingHorizontal="18dp"
+        android:paddingVertical="10dp"
+        android:textColor="#F2F6FF"
+        android:textSize="13sp"
+        android:visibility="gone" />
 
 </FrameLayout>

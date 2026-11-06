@@ -16,6 +16,7 @@ import android.view.View
 import android.view.animation.OvershootInterpolator
 import com.example.myzuoye.R
 import kotlin.math.max
+import kotlin.math.sin
 
 /**
  * Q 版人物形象组件：显示圆角贴纸风格的 Q 版猫耳女仆图片，点击有简单互动。
@@ -54,6 +55,9 @@ class MascotView @JvmOverloads constructor(
 
         /** 缩到最小字号还放不下时的硬上限 */
         private const val MAX_LINES = 3
+
+        /** 打字机每字间隔（毫秒）：再快就看不清，再慢会等得烦躁 */
+        private const val TYPE_INTERVAL_MS = 30L
     }
 
     private var mood = MOOD_IDLE
@@ -77,9 +81,35 @@ class MascotView @JvmOverloads constructor(
         isFakeBoldText = true
     }
 
+    /** 打字光标 */
+    private val caretPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(60, 60, 70)
+    }
+
+    /** 系统是否关闭了动画（无障碍 / 开发者选项）。关掉时直接整句显示，不做逐字效果 */
+    private val animationsOff: Boolean by lazy {
+        runCatching {
+            android.provider.Settings.Global.getFloat(
+                context.contentResolver,
+                android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f
+            ) == 0f
+        }.getOrDefault(false)
+    }
+
     private var bitmap: Bitmap? = null
     private var bubbleText: String? = null
     private var bubbleTimer: Runnable? = null
+
+    /**
+     * 打字机效果：气泡按整句排版（宽度不跳），但只画前 [visibleChars] 个字。
+     *
+     * 逐字显现比一次性弹出更像「在说话」；排版仍然基于全文，
+     * 所以气泡尺寸从第一帧起就是最终大小，不会边打字边变宽。
+     */
+    private var bubbleLayout: Bubble? = null
+    private var visibleChars = 0
+    private var typingRunnable: Runnable? = null
 
     /** 气泡文字密度（按屏幕密度缩放，避免高分辨率下太小） */
     private val density = context.resources.displayMetrics.density
@@ -88,8 +118,8 @@ class MascotView @JvmOverloads constructor(
         loadBitmap()
     }
 
-    /** 呼吸动画是否在跑，避免重复启动 */
-    private var floatAnimator = false
+    /** 待机浮动是否在跑，避免重复启动 */
+    private var floating = false
 
     /**
      * 待机时轻轻上下浮动，像在呼吸。
@@ -97,29 +127,32 @@ class MascotView @JvmOverloads constructor(
      * 幅度只有 3dp：动得太多会让人分心，也太像「广告条」。
      * 动画挂在 ViewPropertyAnimator 上，系统关掉动画时会自动不生效。
      * 气泡和人物在同一个 View 里，跟着一起浮动，反而更像角色在说话。
+     *
+     * 注意：这里以前写的是 `if (floatAnimator != null)`，而字段是 Boolean，
+     * 与 null 比较恒为 true，导致浮动从来没跑起来。现在改用明确的布尔值判断。
      */
     private fun startIdleFloat() {
-        if (floatAnimator != null) return
+        if (floating) return
+        floating = true
         val dy = 3f * resources.displayMetrics.density
         animate().translationY(-dy)
             .setDuration(1600L)
             .setInterpolator(android.view.animation.AccelerateDecelerateInterpolator())
             .withEndAction { floatDown(dy) }
             .start()
-        floatAnimator = true
     }
 
     private fun floatDown(dy: Float) {
-        if (!floatAnimator) return
+        if (!floating) return
         animate().translationY(0f)
             .setDuration(1600L)
             .setInterpolator(android.view.animation.AccelerateDecelerateInterpolator())
-            .withEndAction { startIdleFloat() }
+            .withEndAction { if (floating) startIdleFloat() }
             .start()
     }
 
     private fun stopIdleFloat() {
-        floatAnimator = false
+        floating = false
         animate().cancel()
         translationY = 0f
     }
@@ -132,6 +165,7 @@ class MascotView @JvmOverloads constructor(
     override fun onDetachedFromWindow() {
         stopIdleFloat()
         bubbleTimer?.let { removeCallbacks(it) }
+        typingRunnable?.let { removeCallbacks(it) }
         super.onDetachedFromWindow()
     }
 
@@ -153,6 +187,12 @@ class MascotView @JvmOverloads constructor(
         }
     }
 
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        // 控件尺寸变了，之前排好的气泡不能再用
+        bubbleLayout = null
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val bmp = bitmap ?: return
@@ -160,8 +200,10 @@ class MascotView @JvmOverloads constructor(
         val h = height.toFloat()
         if (w <= 0 || h <= 0) return
 
-        // 1) 先给气泡排版，算出它占多高
-        val bubble = bubbleText?.let { layoutBubble(w, h, it) }
+        // 1) 先给气泡排版，算出它占多高。排版基于全文，打字过程中尺寸不变
+        val bubble = bubbleText?.let { text ->
+            bubbleLayout ?: layoutBubble(w, h, text).also { bubbleLayout = it }
+        }
 
         // 2) 人物区域：平时固定留出上部 40%，气泡更高时继续往下让
         val avatarTop = max(h * 0.40f, bubble?.bottom ?: 0f)
@@ -305,12 +347,49 @@ class MascotView @JvmOverloads constructor(
 
         bubbleTextPaint.textSize = bubble.textSize
         var baseline = rect.top + 7f * density - bubbleTextPaint.ascent()
+        // 打字机：只画前 visibleChars 个字；visibleChars 为 Int.MAX_VALUE 时等于整句
+        var remaining = visibleChars
         for (line in bubble.lines) {
+            if (remaining <= 0) break
+            val shown = if (remaining >= line.length) line else line.substring(0, remaining)
+            remaining -= line.length
             // 气泡被压缩高度时，行距按实际可用高度均分，避免文字溢出气泡底边
-            canvas.drawText(line, rect.centerX(), baseline, bubbleTextPaint)
+            canvas.drawText(shown, rect.centerX(), baseline, bubbleTextPaint)
             baseline += bubble.lineHeight
             if (baseline - bubbleTextPaint.descent() > rect.bottom) break
         }
+
+        // 还在打字时，在最后一个字后面画一根闪烁的竖线，读起来更像「正在说话」
+        val full = bubbleText
+        if (full != null && visibleChars < full.length) {
+            drawTypingCaret(canvas, bubble)
+        }
+    }
+
+    /** 打字光标：定位到当前最后一个字右侧，明暗按时间缓慢呼吸 */
+    private fun drawTypingCaret(canvas: Canvas, bubble: Bubble) {
+        val rect = bubble.rect
+        // 找出光标所在行与最后一个可见字
+        var lineIndex = 0
+        var used = 0
+        for ((index, line) in bubble.lines.withIndex()) {
+            if (used + line.length >= visibleChars) {
+                lineIndex = index
+                break
+            }
+            used += line.length
+        }
+        val line = bubble.lines.getOrNull(lineIndex) ?: return
+        val shownLen = (visibleChars - used).coerceIn(0, line.length)
+        val shown = line.substring(0, shownLen)
+        val textW = bubbleTextPaint.measureText(shown)
+        val x = rect.centerX() - bubbleTextPaint.measureText(line) / 2f + textW + 1.5f * density
+        val top = rect.top + 7f * density + lineIndex * bubble.lineHeight
+        val bottom = top + bubble.textSize * 1.1f
+
+        val blink = ((sin(System.currentTimeMillis() / 260.0) + 1) / 2).toFloat()
+        caretPaint.alpha = (90 + 130 * blink).toInt()
+        canvas.drawRoundRect(x, top, x + 1.8f * density, bottom, 1f * density, 1f * density, caretPaint)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -355,15 +434,37 @@ class MascotView @JvmOverloads constructor(
 
     private fun showBubble(text: String) {
         bubbleText = text
+        // 换了文案就重新排版（尺寸按全文算，打字过程中不会变宽）
+        bubbleLayout = null
+        typingRunnable?.let { removeCallbacks(it) }
+        visibleChars = if (animationsOff) text.length else 0
+
+        if (visibleChars < text.length) {
+            val step = object : Runnable {
+                override fun run() {
+                    if (bubbleText != text) return
+                    visibleChars = (visibleChars + 1).coerceAtMost(text.length)
+                    invalidate()
+                    if (visibleChars < text.length) postDelayed(this, TYPE_INTERVAL_MS)
+                }
+            }
+            typingRunnable = step
+            postDelayed(step, TYPE_INTERVAL_MS)
+        }
+
         invalidate()
         bubbleTimer?.let { removeCallbacks(it) }
         bubbleTimer = Runnable {
             bubbleText = null
+            bubbleLayout = null
+            visibleChars = 0
             invalidate()
         }
-        // 文字越长停留越久，长句子来不及看完就消失会显得很敷衍
-        val duration = 1800L + text.length * 70L
-        postDelayed(bubbleTimer, duration.coerceAtMost(4200L))
+        // 文字越长停留越久，长句子来不及看完就消失会显得很敷衍；
+        // 打字本身也花时间，所以额外把打字耗时补进停留时长
+        val typingCost = text.length.coerceAtMost(40) * TYPE_INTERVAL_MS
+        val duration = 1800L + typingCost + text.length * 70L
+        postDelayed(bubbleTimer, duration.coerceAtMost(5200L))
     }
 
     /** 切换情绪表情；返回是否真的变化 */

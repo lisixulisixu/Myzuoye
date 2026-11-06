@@ -10,6 +10,10 @@ import android.content.Context
  *
  * 这里刻意保持极轻量：只有几个标量，读写都是内存级的 SharedPreferences 操作，
  * 不会给主线程带来可感知的负担。
+ *
+ * 写入侧做了两层节流，避免「每个 64KB 分片都跨进程刷新一次卡片」：
+ * - 传输进度只在百分比跨越 5% 时才写盘；
+ * - 状态（连接 / 传输 / 文件名）没变时直接返回。
  */
 object WidgetState {
 
@@ -18,12 +22,18 @@ object WidgetState {
     private const val KEY_TRANSFERRING = "transferring"
     private const val KEY_RECEIVED_COUNT = "received_count"
     private const val KEY_TRANSFER_NAME = "transfer_name"
+    private const val KEY_PROGRESS = "progress"
+    private const val KEY_PEER = "peer"
 
     data class Snapshot(
         val connected: Boolean,
         val transferring: Boolean,
         val receivedCount: Int,
-        val transferName: String
+        val transferName: String,
+        /** 0..100，仅在传输中有效 */
+        val progress: Int,
+        /** 已连接的对端名称，没有则为空 */
+        val peer: String
     )
 
     private fun prefs(context: Context) =
@@ -35,7 +45,9 @@ object WidgetState {
             connected = p.getBoolean(KEY_CONNECTED, false),
             transferring = p.getBoolean(KEY_TRANSFERRING, false),
             receivedCount = p.getInt(KEY_RECEIVED_COUNT, 0),
-            transferName = p.getString(KEY_TRANSFER_NAME, "").orEmpty()
+            transferName = p.getString(KEY_TRANSFER_NAME, "").orEmpty(),
+            progress = p.getInt(KEY_PROGRESS, 0).coerceIn(0, 100),
+            peer = p.getString(KEY_PEER, "").orEmpty()
         )
     }
 
@@ -50,21 +62,42 @@ object WidgetState {
         TransferWidgetProvider.refresh(context)
     }
 
+    /** 记住对端名称，卡片上显示「已连接 Pixel 9」比「已连接」信息量大得多 */
+    fun setPeer(context: Context, name: String) {
+        val p = prefs(context)
+        val current = p.getString(KEY_PEER, "").orEmpty()
+        if (current == name) return
+        p.edit().putString(KEY_PEER, name).apply()
+        TransferWidgetProvider.refresh(context)
+    }
+
     /**
      * 是否正在传输。
      *
      * [name] 用于传输中显示文件名；key 里带上名字，
      * 这样连续多个文件时文件名变化也能刷新，但同一文件的进度回调不会反复刷 widget。
      */
-    fun setTransferring(context: Context, transferring: Boolean, name: String = "") {
+    fun setTransferring(
+        context: Context,
+        transferring: Boolean,
+        name: String = "",
+        progress: Int = 0
+    ) {
         val p = prefs(context)
         val current = p.getBoolean(KEY_TRANSFERRING, false)
         val currentName = p.getString(KEY_TRANSFER_NAME, "").orEmpty()
         val safeName = if (transferring) name else ""
-        if (current == transferring && currentName == safeName) return
+        val safeProgress = if (transferring) progress.coerceIn(0, 100) else 0
+
+        val sameState = current == transferring && currentName == safeName
+        // 同一文件的高频进度：只有跨过 5% 才值得刷新一次
+        val progressDelta = kotlin.math.abs(safeProgress - p.getInt(KEY_PROGRESS, 0))
+        if (sameState && progressDelta < 5) return
+
         p.edit()
             .putBoolean(KEY_TRANSFERRING, transferring)
             .putString(KEY_TRANSFER_NAME, safeName)
+            .putInt(KEY_PROGRESS, safeProgress)
             .apply()
         TransferWidgetProvider.refresh(context)
     }

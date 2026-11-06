@@ -60,7 +60,8 @@ class PixelRunnerView @JvmOverloads constructor(
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val playerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { isFilterBitmap = true }
     private val countdownPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(70, 70, 90)
+        // 深色天空上必须用浅色数字，否则倒计时几乎看不见
+        color = Color.rgb(233, 240, 255)
         textSize = 72f * context.resources.displayMetrics.density
         textAlign = Paint.Align.CENTER
         isFakeBoldText = true
@@ -351,11 +352,12 @@ class PixelRunnerView @JvmOverloads constructor(
         const val COUNTDOWN_SECONDS = 3f   // 开场倒计时秒数
 
         // 配色（像素风，低饱和）
-        val SKY = Color.rgb(235, 242, 250)
-        val GROUND = Color.rgb(120, 170, 120)
-        val GROUND_LINE = Color.rgb(90, 140, 90)
-        val OBSTACLE = Color.rgb(90, 90, 100)
-        val OBSTACLE_HI = Color.rgb(130, 130, 145)
+        // 夜空：与主界面同一套深色调，避免进游戏时突然出现一大块亮白
+        val SKY = Color.rgb(12, 18, 32)
+        val GROUND = Color.rgb(26, 46, 44)
+        val GROUND_LINE = Color.rgb(58, 92, 88)
+        val OBSTACLE = Color.rgb(96, 116, 156)
+        val OBSTACLE_HI = Color.rgb(148, 172, 214)
         val BODY = Color.rgb(60, 110, 180)
         val HEAD = Color.rgb(250, 205, 140)
         val EYE = Color.rgb(30, 30, 40)

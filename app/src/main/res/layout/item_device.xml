@@ -1,19 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  附近设备行。
+  之前只有「设备名 + MAC + 一行小字」，看不出哪一条能点、点了会发生什么，
+  现在补上：设备图标、状态胶囊（可连接/连接中/已连接）、右侧箭头暗示可点击。
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:background="?android:attr/selectableItemBackground"
+    android:background="@drawable/bg_row"
     android:clickable="true"
     android:focusable="true"
     android:gravity="center_vertical"
-    android:minHeight="60dp"
+    android:minHeight="64dp"
     android:orientation="horizontal"
-    android:paddingHorizontal="16dp"
+    android:paddingHorizontal="14dp"
     android:paddingVertical="10dp">
+
+    <ImageView
+        android:layout_width="38dp"
+        android:layout_height="38dp"
+        android:background="@drawable/bg_device_icon"
+        android:contentDescription="@null"
+        android:padding="9dp"
+        android:src="@drawable/ic_device_phone" />
 
     <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
         android:layout_weight="1"
         android:orientation="vertical">
 
@@ -31,17 +45,22 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
+            android:ellipsize="end"
             android:fontFamily="monospace"
+            android:maxLines="1"
             android:textColor="@color/text_secondary"
-            android:textSize="12sp" />
+            android:textSize="11.5sp" />
     </LinearLayout>
 
     <TextView
         android:id="@+id/tvDeviceStatus"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginStart="12dp"
+        android:layout_marginStart="10dp"
+        android:background="@drawable/bg_chip"
+        android:paddingHorizontal="10dp"
+        android:paddingVertical="4dp"
         android:textColor="@color/primary_light"
-        android:textSize="12sp" />
+        android:textSize="11.5sp" />
 
 </LinearLayout>

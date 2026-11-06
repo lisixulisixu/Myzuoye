@@ -56,8 +56,16 @@ class ReceivedFilesActivity : AppCompatActivity() {
         rvFiles.layoutManager = LinearLayoutManager(this)
         rvFiles.adapter = adapter
 
+        findViewById<View>(R.id.btnFilesBack).setOnClickListener { finish() }
+
         setupFilters()
         refresh()
+    }
+
+    override fun finish() {
+        super.finish()
+        @Suppress("DEPRECATION")
+        overridePendingTransition(android.R.anim.fade_in, R.anim.activity_out_bottom)
     }
 
     override fun onResume() {

@@ -43,6 +43,9 @@ class ReceivedFileAdapter(
 
     override fun getItemCount(): Int = items.size
 
+    /** 播过入场动画的条目：滚动复用时不重复淡入 */
+    private val animatedUris = HashSet<String>()
+
     override fun onBindViewHolder(holder: FileViewHolder, position: Int) {
         val file = items[position]
         holder.name.text = file.name
@@ -56,16 +59,49 @@ class ReceivedFileAdapter(
 
         if (ThumbnailLoader.isThumbnailable(file.name)) {
             holder.thumb.visibility = View.VISIBLE
+            holder.thumb.backgroundTintList = null
             ThumbnailLoader.load(holder.itemView.context, file.uri, file.name, holder.thumb)
         } else {
-            // 换行复用时必须把上一行的图清掉，否则会看到别的文件的封面
+            // 换行复用时必须把上一行的图清掉，否则会看到别的文件的封面；
+            // 同时按类型给色块上色，纯灰方块看起来像「加载失败」
             holder.thumb.setImageDrawable(null)
+            holder.thumb.backgroundTintList =
+                android.content.res.ColorStateList.valueOf(typeColor(file.name))
             holder.thumb.visibility = View.VISIBLE
         }
 
+        // 首次出现时错峰淡入（每项 30ms），列表打开更有「加载完成」的节奏感
+        if (animatedUris.add(file.uri.toString())) {
+            val density = holder.itemView.resources.displayMetrics.density
+            holder.itemView.alpha = 0f
+            holder.itemView.translationY = 8f * density
+            holder.itemView.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setStartDelay(position.coerceAtMost(8) * 30L)
+                .setDuration(200L)
+                .start()
+        } else {
+            holder.itemView.alpha = 1f
+        }
+
+        holder.itemView.contentDescription = "${file.name}，${holder.meta.text}，点按打开"
         holder.itemView.setOnClickListener { onClick(file) }
         holder.share.setOnClickListener { onShare(file) }
         holder.delete.setOnClickListener { onDelete(file) }
+    }
+
+    /** 非图片/视频的类型色块：一眼能区分文本、压缩包、安装包 */
+    private fun typeColor(name: String): Int {
+        val mime = ThumbnailLoader.mimeOf(name)
+        return when {
+            mime.startsWith("text/") -> 0xFF3F5A8A.toInt()
+            mime.contains("pdf") -> 0xFF8A4A2E.toInt()
+            mime.contains("zip") || mime.contains("compressed") -> 0xFF2E6A70.toInt()
+            mime.contains("android.package") -> 0xFF2F6A44.toInt()
+            mime.startsWith("audio/") -> 0xFF6B3E7A.toInt()
+            else -> 0xFF44506A.toInt()
+        }
     }
 
     /** 列表上显示的中文类型，比 MIME 串好读 */

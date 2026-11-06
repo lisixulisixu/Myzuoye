@@ -79,6 +79,16 @@ class FlowBackgroundView @JvmOverloads constructor(
 
     private var glowRadius = 0f
 
+    /**
+     * 状态色调：连接状态变化时，整块背景会被染上一层很淡的状态色
+     * （未连接冷蓝 / 已连接青绿 / 传输中紫 / 失败红）。
+     * 用户扫一眼背景就知道现在是什么状态，比读一行 11sp 的小字快得多。
+     */
+    private var accentColor = 0
+    private var accentShader: Shader? = null
+    private var accentAlpha = 0f
+    private var accentAnimator: android.animation.ValueAnimator? = null
+
     private val particles = mutableListOf<Particle>()
 
     private data class Particle(
@@ -186,6 +196,16 @@ class FlowBackgroundView @JvmOverloads constructor(
             Shader.TileMode.CLAMP
         )
 
+        // 3.5) 状态色：一层很大的柔光，颜色由连接状态决定
+        if (accentColor != 0) {
+            accentShader = RadialGradient(
+                0f, 0f, (w + h) * 0.55f,
+                intArrayOf((0x66 shl 24) or (accentColor and 0xFFFFFF), 0x00000000),
+                floatArrayOf(0f, 1f),
+                Shader.TileMode.CLAMP
+            )
+        }
+
         // 4) 暗角：中心透明、四周压暗，把视线收到中间
         vignettePaint.shader = RadialGradient(
             w / 2f, h * 0.45f, maxOf(w, h) * 0.78f,
@@ -219,9 +239,58 @@ class FlowBackgroundView @JvmOverloads constructor(
 
         drawAuroraBand(canvas, w, h)
         drawGlows(canvas, w, h)
+        drawAccent(canvas, w, h)
         drawParticles(canvas)
 
         canvas.drawRect(0f, 0f, w, h, vignettePaint)
+    }
+
+    /**
+     * 状态色柔光：位置固定在画面上半部，透明度随状态切换平滑过渡（约 700ms）。
+     * 没有状态色时直接跳过，不产生任何绘制开销。
+     */
+    private fun drawAccent(canvas: Canvas, w: Float, h: Float) {
+        val shader = accentShader ?: return
+        if (accentAlpha <= 0.01f) return
+        canvas.save()
+        canvas.translate(w * 0.5f, h * 0.32f)
+        glowPaint.shader = shader
+        glowPaint.alpha = (255 * accentAlpha).toInt().coerceIn(0, 255)
+        canvas.drawCircle(0f, 0f, (w + h) * 0.55f, glowPaint)
+        canvas.restore()
+        glowPaint.alpha = 255
+    }
+
+    /**
+     * 设置状态色调。
+     *
+     * @param color 目标颜色（ARGB，取 RGB 部分）；0 表示取消状态色
+     * @param strength 最高不透明度，默认 0.30，太高会盖住列表文字
+     */
+    fun setAccent(color: Int, strength: Float = 0.30f) {
+        if (accentColor == color) return
+        accentColor = color
+        accentShader = if (color != 0 && glowRadius > 0f) {
+            RadialGradient(
+                0f, 0f, glowRadius * 1.85f,
+                intArrayOf((0x66 shl 24) or (color and 0xFFFFFF), 0x00000000),
+                floatArrayOf(0f, 1f),
+                Shader.TileMode.CLAMP
+            )
+        } else {
+            null
+        }
+
+        val target = if (color == 0) 0f else strength.coerceIn(0f, 1f)
+        accentAnimator?.cancel()
+        accentAnimator = android.animation.ValueAnimator.ofFloat(accentAlpha, target).apply {
+            duration = 700L
+            addUpdateListener {
+                accentAlpha = it.animatedValue as Float
+                invalidate()
+            }
+            start()
+        }
     }
 
     /** 四团柔光：位置随相位漂移，同时在两套配色之间交叉淡入淡出 */
