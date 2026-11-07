@@ -19,11 +19,12 @@ import android.provider.Settings
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
+import android.widget.ProgressBar
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -51,7 +52,10 @@ import com.example.myzuoye.ui.CoverLiveView
 import com.example.myzuoye.ui.DeviceAdapter
 import com.example.myzuoye.ui.FlowBackgroundView
 import com.example.myzuoye.ui.attachPressFeedback
+import com.example.myzuoye.ui.hapticError
+import com.example.myzuoye.ui.hapticSuccess
 import com.example.myzuoye.ui.MascotView
+import com.example.myzuoye.ui.TransferProgressView
 import com.example.myzuoye.util.Formatters
 import com.example.myzuoye.weather.WeatherRepository
 import com.example.myzuoye.widget.TransferWidgetProvider
@@ -118,7 +122,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var btnPickFile: Button
     private lateinit var btnViewFiles: Button
-    private lateinit var pbTransfer: ProgressBar
+    private lateinit var pbTransfer: TransferProgressView
     private lateinit var tvTransferState: TextView
     private lateinit var btnCancelTransfer: TextView
 
@@ -313,7 +317,7 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     getString(R.string.send_queue_partial, okCount, failCount)
                 }
-                updateCancelButton()
+                updateTransferUi()
             }
         )
 
@@ -347,7 +351,7 @@ class MainActivity : AppCompatActivity() {
             val paused = pausedSend
             if (paused != null && !TransferManager.isSending) {
                 pausedSend = null
-                updateCancelButton()
+                updateTransferUi()
                 enqueueFiles(listOf(paused.uri))
                 return@setOnClickListener
             }
@@ -360,7 +364,7 @@ class MainActivity : AppCompatActivity() {
             val cancelled = TransferManager.cancelActive()
             toast(getString(if (cancelled) R.string.transfer_cancelled else R.string.queue_cleared))
             if (!cancelled && hadQueue) log("已清空发送队列")
-            updateCancelButton()
+            updateTransferUi()
         }
         // 长按「取消」= 暂停：记住当前这个文件，稍后可以接着发
         btnCancelTransfer.setOnLongClickListener {
@@ -369,7 +373,7 @@ class MainActivity : AppCompatActivity() {
             sendQueue.clear()
             TransferManager.cancelSend()
             toast(getString(R.string.send_paused, pendingName))
-            updateCancelButton()
+            updateTransferUi()
             true
         }
         btnPlayGame.setOnClickListener { openGameForFun() }
@@ -1436,7 +1440,7 @@ class MainActivity : AppCompatActivity() {
         }
         log("已加入发送队列：$queued 个文件")
         if (queued > 1) toast(getString(R.string.send_queue_added, queued))
-        updateCancelButton()
+        updateTransferUi()
     }
 
     /**
@@ -1588,6 +1592,7 @@ class MainActivity : AppCompatActivity() {
     private fun renderReceiveProgress(progress: Float, speed: Long) {
         val percent = (progress * 100).toInt()
         pbTransfer.progress = percent
+        pbTransfer.setBusy(true)
         // transfer_receiving 需要两个参数（文件名 + 百分比），缺一就会抛
         // MissingFormatArgumentException 直接崩溃，这里必须都传齐。
         val name = TransferManager.receivingFileName.ifBlank {
@@ -1602,29 +1607,34 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.transfer_receiving_speed, name, percent, suffix)
         }
         // 接收中也要有「取消」，不然收到不想收的大文件只能等对方发完
-        updateCancelButton()
+        updateTransferUi()
     }
 
     private fun renderReceiveDone(path: String?) {
         pbTransfer.progress = 0
+        pbTransfer.setBusy(false)
         if (path != null) {
             tvTransferState.text = getString(R.string.transfer_received_done, path)
             coverLive.setMood(CoverLiveView.MOOD_CONNECTED)
             flowBackground.setAccent(COLOR_ACCENT_ONLINE, 0.18f)
             coverLive.celebrate()
+            pbTransfer.celebrate()
+            window.decorView.hapticSuccess()
             showHint("已接收：${File(path).name}", HintKind.SUCCESS)
         } else {
             tvTransferState.text = getString(R.string.transfer_received_fail)
             coverLive.setMood(CoverLiveView.MOOD_ERROR)
             flowBackground.setAccent(COLOR_ACCENT_ERROR, 0.22f)
+            window.decorView.hapticError()
             showHint(getString(R.string.transfer_received_fail), HintKind.ERROR)
         }
-        updateCancelButton()
+        updateTransferUi()
     }
 
     private fun renderSendProgress(progress: Float, speed: Long) {
         val percent = (progress * 100).toInt()
         pbTransfer.progress = percent
+        pbTransfer.setBusy(true)
         coverLive.setMood(CoverLiveView.MOOD_TRANSFER)
         flowBackground.setAccent(COLOR_ACCENT_TRANSFER, 0.26f)
         val suffix = speedSuffix(speed, TransferManager.sendingTotalBytes, progress)
@@ -1633,7 +1643,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             getString(R.string.transfer_sending_speed, pendingName, percent, suffix)
         }
-        updateCancelButton()
+        updateTransferUi()
     }
 
     /**
@@ -1670,6 +1680,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderSendDone(ok: Boolean) {
         pbTransfer.progress = 0
+        pbTransfer.setBusy(false)
         when {
             // 用户自己点的取消不算失败，文案要区分开
             userCancelled -> {
@@ -1682,6 +1693,8 @@ class MainActivity : AppCompatActivity() {
                 coverLive.setMood(CoverLiveView.MOOD_CONNECTED)
                 flowBackground.setAccent(COLOR_ACCENT_ONLINE, 0.18f)
                 coverLive.celebrate()
+                pbTransfer.celebrate()
+                window.decorView.hapticSuccess()
                 // 队列里还有文件时不弹提示，避免连续发送时提示条一直闪
                 if (sendQueue.pendingCount == 0) {
                     showHint(getString(R.string.transfer_sent_done, pendingName), HintKind.SUCCESS)
@@ -1692,14 +1705,24 @@ class MainActivity : AppCompatActivity() {
                 tvTransferState.text = getString(R.string.transfer_sent_fail)
                 coverLive.setMood(CoverLiveView.MOOD_ERROR)
                 flowBackground.setAccent(COLOR_ACCENT_ERROR, 0.22f)
+                window.decorView.hapticError()
                 showHint(getString(R.string.transfer_sent_fail), HintKind.ERROR)
             }
         }
-        updateCancelButton()
+        updateTransferUi()
     }
 
     /** 「取消」只在真的有事可取消时出现；暂停之后变成「继续发送」 */
-    private fun updateCancelButton() {
+    private fun updateTransferUi() {
+        // 传大文件时锁屏 → Wi-Fi 进省电 → 断连看门狗判死，传输莫名其妙失败。
+        // 只要还有传输在跑就保持屏幕常亮，全部结束后立即释放。
+        val busy = TransferManager.isSending || TransferManager.isReceiving
+        if (busy) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+
         val paused = pausedSend
         if (paused != null && !TransferManager.isSending) {
             btnCancelTransfer.visibility = View.VISIBLE

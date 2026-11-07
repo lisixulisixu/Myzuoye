@@ -4,6 +4,7 @@ import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.RectF
 import android.provider.Settings
@@ -54,6 +55,15 @@ class ConnectionStepsView @JvmOverloads constructor(
         style = Paint.Style.STROKE
         strokeWidth = 1.2f * density
     }
+
+    /** 沿线段流动的「能量点」：外圈晕 + 内芯，两层圆都是预建 Paint，每帧零分配 */
+    private val flowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    /** 等待线段的流动虚线，相位动画用 canvas 平移实现，不用每帧新建 DashPathEffect */
+    private val dashEffect = DashPathEffect(
+        floatArrayOf(4f * density, 5f * density),
+        0f
+    )
 
     /** 当前进行到第几步（0..4，4 表示全部完成） */
     private var step = 0
@@ -138,6 +148,12 @@ class ConnectionStepsView @JvmOverloads constructor(
         }
     }
 
+    /** 仅测试用：直接注入呼吸相位（测试环境没有窗口附着，动画器跑不起来） */
+    internal fun debugPulse(value: Float) {
+        pulse = value
+        invalidate()
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val w = width.toFloat()
@@ -153,13 +169,49 @@ class ConnectionStepsView @JvmOverloads constructor(
             val isDone = i < step
             val isActive = i == step
 
-            // 连接线：已完成的部分用亮的，未完成用暗的
+            // 连接线：已完成的部分用亮的，未完成用暗的；
+            // 正在等待的那一段画流动虚线，刚被点亮的那一段有能量点流向活动步
             if (i < labels.size - 1) {
-                val nextX = slot * (i + 1.5f)
+                val startX = cx + r + 3f * density
+                val endX = slot * (i + 1.5f) - r - 3f * density
                 linePaint.strokeWidth = 2f * density
+                linePaint.pathEffect = null
                 linePaint.color = if (i < step) doneColor else idleColor
                 linePaint.alpha = if (i < step) 200 else 110
-                canvas.drawLine(cx + r + 3f * density, cy, nextX - r - 3f * density, cy, linePaint)
+                canvas.drawLine(startX, cy, endX, cy, linePaint)
+
+                if (!failed) {
+                    when {
+                        // 刚走完的线段：一颗小光点从上一个点流向当前活动点
+                        i == step - 1 && step in 1 until STEP_DONE -> {
+                            val k = pulse
+                            val x = startX + (endX - startX) * k
+                            flowPaint.color = accent
+                            flowPaint.alpha = (60 * (1f - k)).toInt().coerceIn(0, 255)
+                            canvas.drawCircle(x, cy, 3.2f * density, flowPaint)
+                            flowPaint.alpha = 210
+                            canvas.drawCircle(x, cy, 1.4f * density, flowPaint)
+                        }
+
+                        // 还没走到的线段：虚线缓慢向前蠕动，示意「马上轮到」
+                        i == step && step < STEP_DONE -> {
+                            val offset = pulse * 9f * density
+                            canvas.save()
+                            canvas.clipRect(startX, cy - 3f * density, endX, cy + 3f * density)
+                            canvas.translate(offset, 0f)
+                            linePaint.color = accent
+                            linePaint.alpha = 80
+                            linePaint.pathEffect = dashEffect
+                            canvas.drawLine(
+                                startX - 18f * density, cy,
+                                endX + 9f * density, cy,
+                                linePaint
+                            )
+                            linePaint.pathEffect = null
+                            canvas.restore()
+                        }
+                    }
+                }
             }
 
             when {

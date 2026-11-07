@@ -305,17 +305,13 @@
                     android:textColor="@color/btn_text_secondary"
                     android:textSize="13sp" />
 
-                <ProgressBar
+                <com.example.myzuoye.ui.TransferProgressView
                     android:id="@+id/pbTransfer"
-                    style="?android:attr/progressBarStyleHorizontal"
                     android:layout_width="0dp"
                     android:layout_height="6dp"
                     android:layout_marginStart="10dp"
                     android:layout_weight="1"
-                    android:contentDescription="@string/transfer_idle"
-                    android:max="100"
-                    android:progress="0"
-                    android:progressDrawable="@drawable/bg_progress" />
+                    android:contentDescription="@string/transfer_idle" />
             </LinearLayout>
 
             <LinearLayout

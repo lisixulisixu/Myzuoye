@@ -10,6 +10,13 @@
 -->
 <ripple xmlns:android="http://schemas.android.com/apk/res/android"
     android:color="#44FFFFFF">
+    <!-- mask：把涟漪裁进 14dp 圆角里，否则扩散是矩形的，和按钮形状对不上 -->
+    <item android:id="@android:id/mask">
+        <shape android:shape="rectangle">
+            <solid android:color="#FFFFFF" />
+            <corners android:radius="14dp" />
+        </shape>
+    </item>
     <item>
         <selector>
             <item android:state_enabled="false">

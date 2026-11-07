@@ -56,6 +56,21 @@ class MascotView @JvmOverloads constructor(
         /** 缩到最小字号还放不下时的硬上限 */
         private const val MAX_LINES = 3
 
+        /** 完成/失败台词：随机抽一条，连续传几个文件不会每次都一样 */
+        private val DONE_LINES = arrayOf(
+            "传输完成！",
+            "送达啦~",
+            "这次超快！",
+            "收到！一个字节都没少~",
+            "稳稳送达！"
+        )
+
+        private val FAIL_LINES = arrayOf(
+            "传输失败了…",
+            "中断了，再试一次吧",
+            "连接好像断了…"
+        )
+
         /** 打字机每字间隔（毫秒）：再快就看不清，再慢会等得烦躁 */
         private const val TYPE_INTERVAL_MS = 30L
     }
@@ -488,17 +503,17 @@ class MascotView @JvmOverloads constructor(
         showBubble("开始传输啦~")
     }
 
-    /** 传输完成提醒 */
+    /** 传输完成提醒：台词随机，连续传几个文件不会每次都一样 */
     fun showDone() {
         setTransferring(false)
         setMood(MOOD_HAPPY)
-        showBubble("传输完成！")
+        showBubble(DONE_LINES.random())
     }
 
     /** 传输失败提醒 */
     fun showFail() {
         setTransferring(false)
         setMood(MOOD_ANGRY)
-        showBubble("传输失败了…")
+        showBubble(FAIL_LINES.random())
     }
 }

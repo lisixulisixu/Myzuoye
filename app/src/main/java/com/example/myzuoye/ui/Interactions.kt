@@ -1,5 +1,6 @@
 package com.example.myzuoye.ui
 
+import android.os.Build
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
@@ -29,5 +30,23 @@ fun View.attachPressFeedback(scale: Float = 0.96f) {
             }
         }
         false
+    }
+}
+
+/** 传输成功时的触感。CONFIRM 是 API 30 才有的语义化触感，旧版本退回短促的按键感。 */
+fun View.hapticSuccess() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+    } else {
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+    }
+}
+
+/** 传输失败时的触感：REJECT 是两段短促的「拒绝」脉冲，锁屏放兜里也能感知到出错。 */
+fun View.hapticError() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        performHapticFeedback(HapticFeedbackConstants.REJECT)
+    } else {
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
     }
 }
