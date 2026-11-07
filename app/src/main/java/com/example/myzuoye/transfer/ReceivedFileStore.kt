@@ -210,6 +210,7 @@ object ReceivedFileStore {
         }
     }
 
+    @androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.Q)
     private fun listFromMediaStore(context: Context): List<ReceivedFile> {        val resolver = context.contentResolver
         val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         val relativePath = "${Environment.DIRECTORY_DOWNLOADS}/$SUB_DIR/"
@@ -258,6 +259,7 @@ object ReceivedFileStore {
 
     // ------------------------------------------------------------------ MediaStore
 
+    @androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.Q)
     private fun createInDownloads(context: Context, safeName: String): ReceiveTarget? {
         val resolver = context.contentResolver
         val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)

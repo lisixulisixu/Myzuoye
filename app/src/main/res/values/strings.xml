@@ -251,12 +251,15 @@
     <string name="qr_decoding">正在识别二维码…</string>
     <string name="qr_not_found">这张图里没有识别到二维码，换一张更清晰的试试</string>
     <string name="qr_not_ours">识别到了二维码，但不是本应用的连接码</string>
-    <string name="qr_connect_log">扫码连接 %1$s:%2$s</string>
+    <string name="qr_connect_log">扫码连接 %1$s:%2$d</string>
     <string name="qr_connect_hint">已按二维码连接 %1$s，等待对方确认…</string>
 
     <!-- 已收文件页搜索 -->
     <string name="files_search_hint">搜索文件名…</string>
     <string name="files_empty_search">没有匹配的文件，换个关键词试试</string>
+
+    <!-- 设备空态（横向一行，区域高度受限） -->
+    <string name="devices_empty_compact">还没有发现附近设备，正在扫描…</string>
 
     <!-- 传输历史 -->
     <string name="transfer_log">传输历史</string>

@@ -61,6 +61,7 @@ import com.example.myzuoye.ui.attachPressFeedback
 import com.example.myzuoye.ui.hapticError
 import com.example.myzuoye.ui.hapticSuccess
 import com.example.myzuoye.ui.MascotView
+import com.example.myzuoye.ui.RadarScanView
 import com.example.myzuoye.ui.TransferProgressView
 import com.example.myzuoye.util.Formatters
 import com.example.myzuoye.weather.WeatherRepository
@@ -68,9 +69,6 @@ import com.example.myzuoye.widget.TransferWidgetProvider
 import com.example.myzuoye.widget.WidgetState
 import java.io.File
 import java.text.SimpleDateFormat
-import java.time.LocalDateTime
-import java.time.LocalTime
-import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
 
@@ -91,11 +89,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvLog: TextView
     private lateinit var rvDevices: RecyclerView
     private lateinit var tvDevicesEmpty: View
+
+    /** 空态里的雷达扫描动效（搜索中旋转） */
+    private lateinit var radarScan: RadarScanView
     private lateinit var btnDiscover: Button
     private lateinit var btnCreateGroup: Button
     private lateinit var btnDisconnect: Button
     private lateinit var btnPlayGame: Button
-    private lateinit var btnEmptySearch: Button
 
     /** 连接四步进度（发现 → 协商 → 组网 → 通道） */
     private lateinit var steps: ConnectionStepsView
@@ -176,7 +176,15 @@ class MainActivity : AppCompatActivity() {
     private var gamePromptDisabled = false
 
     private val logLines = ArrayDeque<String>()
-    private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+
+    /**
+     * 日志时间戳格式化。
+     *
+     * 用 SimpleDateFormat 而不是 java.time：后者在 API 26 才进系统，
+     * minSdk 24 的设备上字段初始化就会 NoClassDefFoundError（启动即崩）。
+     * 只在主线程用，不存在 SimpleDateFormat 的线程安全顾虑。
+     */
+    private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
     /** 已经弹过一次权限框，避免每次 onStart 反复打扰 */
     private var permissionAsked = false
@@ -384,7 +392,6 @@ class MainActivity : AppCompatActivity() {
         }
         btnPlayGame.setOnClickListener { openGameForFun() }
         findViewById<View>(R.id.btnTools).setOnClickListener { showToolsMenu() }
-        btnEmptySearch.setOnClickListener { startDiscovery(force = true) }
         // 长按「玩游戏」：恢复「传输时询问要不要玩」的提示
         btnPlayGame.setOnLongClickListener {
             restoreGamePrompt()
@@ -525,11 +532,11 @@ class MainActivity : AppCompatActivity() {
         flowBackground = findViewById(R.id.flowBackground)
         rvDevices = findViewById(R.id.rvDevices)
         tvDevicesEmpty = findViewById(R.id.tvDevicesEmpty)
+        radarScan = findViewById(R.id.radarScan)
         btnDiscover = findViewById(R.id.btnDiscover)
         btnCreateGroup = findViewById(R.id.btnCreateGroup)
         btnDisconnect = findViewById(R.id.btnDisconnect)
         btnPlayGame = findViewById(R.id.btnPlayGame)
-        btnEmptySearch = findViewById(R.id.btnEmptySearch)
 
         tvChannelState = findViewById(R.id.tvChannelState)
         rvChat = findViewById(R.id.rvChat)
@@ -554,7 +561,7 @@ class MainActivity : AppCompatActivity() {
         // 所有按钮统一「按下缩放 + 轻触觉反馈」，比只有涟漪更有实感
         listOf(
             btnDiscover, btnCreateGroup, btnDisconnect, btnPlayGame,
-            btnPickFile, btnViewFiles, btnSend, btnEmptySearch
+            btnPickFile, btnViewFiles, btnSend
         ).forEach { it.attachPressFeedback() }
 
         // 回车直接发送：聊天这种高频输入不该逼人抬手去点按钮
@@ -1124,6 +1131,8 @@ class MainActivity : AppCompatActivity() {
         controller.onDiscoveryChanged = { discovering ->
             searching = discovering
             if (discovering) tvP2pState.setText(R.string.p2p_state_searching)
+            // 空态可见时同步雷达：搜索开始就转，停下就静止，不靠猜
+            radarScan.setScanning(discovering && tvDevicesEmpty.visibility == View.VISIBLE)
         }
     }
 
@@ -1243,7 +1252,15 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return
         if (locationWarned) return
         val lm = getSystemService(LOCATION_SERVICE) as? android.location.LocationManager ?: return
-        val enabled = runCatching { lm.isLocationEnabled }.getOrDefault(true)
+        // isLocationEnabled 是 API 28 才有的，低版本按「GPS 或网络定位任一开启」判断
+        val enabled = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            runCatching { lm.isLocationEnabled }.getOrDefault(true)
+        } else {
+            runCatching {
+                lm.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) ||
+                    lm.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER)
+            }.getOrDefault(true)
+        }
         if (!enabled) {
             locationWarned = true
             log("系统定位未开启：Android 12 及以下搜不到设备，请打开定位开关")
@@ -1526,9 +1543,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 列表为空时显示引导文案，有设备就藏起来 */
+    /** 列表为空时显示引导文案，有设备就藏起来；顺带决定雷达要不要转 */
     private fun updateDevicesEmpty() {
-        tvDevicesEmpty.visibility = if (adapter.itemCount == 0) View.VISIBLE else View.GONE
+        val empty = adapter.itemCount == 0
+        tvDevicesEmpty.visibility = if (empty) View.VISIBLE else View.GONE
+        // 有设备时空态（连同雷达）已经隐藏，没必要继续跑帧循环
+        radarScan.setScanning(empty && searching)
     }
 
     /** 更新四步进度，同时记住当前位置（失败时要靠它把红点画对地方） */
@@ -2044,7 +2064,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun log(message: String) {
-        logLines.addLast("${LocalTime.now().format(timeFormatter)}  $message")
+        logLines.addLast("${timeFormatter.format(Date())}  $message")
         while (logLines.size > MAX_LOG_LINES) logLines.removeFirst()
         tvLog.text = logLines.joinToString("\n")
     }
@@ -2073,7 +2093,7 @@ class MainActivity : AppCompatActivity() {
     private fun exportLog() {
         val content = buildString {
             appendLine("WiFi 快传 诊断日志")
-            appendLine("导出时间：${LocalDateTime.now()}")
+            appendLine("导出时间：${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}")
             appendLine(
                 "设备：${Build.MANUFACTURER} ${Build.MODEL} / " +
                     "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"

@@ -67,9 +67,9 @@ class WifiDirectReceiver(
             WifiP2pManager.CONNECTION_REQUEST_REJECT
         }
 
-        // MacAddress 类自 API 28 引入；setConnectionRequestResult 的 String 重载在 API 36 被移除，
-        // 所以统一走 MacAddress 版本。低于 API 28 的设备无法自动受理，只能靠用户手动点设备连接。
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
+        // MacAddress 重载从 API 33 才有（API 29 的 String 重载在 36 被移除）。
+        // 低于 33 的设备调它会 NoSuchMethodError，只能靠用户手动点设备连接。
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
 
         val mac = MacAddress.fromString(requestingDevice.deviceAddress) ?: return
         runCatching {
@@ -95,14 +95,14 @@ class WifiDirectReceiver(
             }
 
             WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION -> {
-                val networkInfo = intent.getParcelableExtra(
+                val networkInfo = intent.parcelableExtra(
                     WifiP2pManager.EXTRA_NETWORK_INFO,
                     NetworkInfo::class.java
                 )
 
                 // 关键：连接请求（邀请）广播带 EXTRA_WIFI_P2P_DEVICE，表示有设备请求接入，
                 // 此时 NetworkInfo 可能尚未 isConnected，需要优先受理邀请。
-                val requestingDevice = intent.getParcelableExtra(
+                val requestingDevice = intent.parcelableExtra(
                     WifiP2pManager.EXTRA_WIFI_P2P_DEVICE,
                     WifiP2pDevice::class.java
                 )
@@ -128,7 +128,7 @@ class WifiDirectReceiver(
             }
 
             WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION -> {
-                intent.getParcelableExtra(
+                intent.parcelableExtra(
                     WifiP2pManager.EXTRA_WIFI_P2P_DEVICE,
                     WifiP2pDevice::class.java
                 )?.let(callbacks::onThisDeviceChanged)
@@ -140,4 +140,21 @@ class WifiDirectReceiver(
             }
         }
     }
+}
+
+/**
+ * 取 Parcelable 附加数据，兼容新旧系统。
+ *
+ * `getParcelableExtra(name, Class)` 是 API 33 才加的重载，直接调用在 Android 12 及以下
+ * 会抛 NoSuchMethodError（Error 不是 Exception，try/catch 兜不住）。低版本回退到
+ * 已废弃的泛型版本——类型不安全，用 as? 兜底。
+ */
+internal fun <T : android.os.Parcelable> android.content.Intent.parcelableExtra(
+    name: String,
+    clazz: Class<T>
+): T? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    getParcelableExtra(name, clazz)
+} else {
+    @Suppress("DEPRECATION")
+    getParcelableExtra(name) as? T
 }

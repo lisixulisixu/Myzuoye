@@ -188,11 +188,15 @@
             android:textColor="@color/text_secondary"
             android:textSize="12sp" />
 
-        <!-- 设备列表 + 空状态（图标 + 主副文案 + 直接开始搜索） -->
+        <!-- 设备列表 + 空状态。
+             这块区域被上下两面板夹着，实际高度只有 50dp 上下：
+             原来的「图标 + 两行文案 + 按钮」根本放不下（会被裁掉），
+             所以空态做成一行横排——左边小雷达转着，右边一句提示。 -->
         <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="1">
+            android:layout_weight="1"
+            android:minHeight="52dp">
 
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/rvDevices"
@@ -205,52 +209,27 @@
 
             <LinearLayout
                 android:id="@+id/tvDevicesEmpty"
-                android:layout_width="match_parent"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="center"
-                android:gravity="center"
-                android:orientation="vertical"
-                android:paddingHorizontal="32dp">
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingHorizontal="16dp">
 
-                <ImageView
-                    android:layout_width="56dp"
-                    android:layout_height="56dp"
-                    android:alpha="0.9"
-                    android:contentDescription="@null"
-                    android:src="@drawable/ic_devices_empty" />
+                <!-- 搜索中旋转的雷达：小尺寸下只画两圈环，否则线太密 -->
+                <com.example.myzuoye.ui.RadarScanView
+                    android:id="@+id/radarScan"
+                    android:layout_width="46dp"
+                    android:layout_height="46dp" />
 
                 <TextView
+                    android:id="@+id/tvDevicesEmptyText"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
-                    android:text="@string/devices_empty_title"
-                    android:textColor="@color/text_primary"
-                    android:textSize="13sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:gravity="center"
-                    android:lineSpacingExtra="3dp"
-                    android:text="@string/devices_empty_hint"
+                    android:layout_marginStart="10dp"
+                    android:text="@string/devices_empty_compact"
                     android:textColor="@color/text_secondary"
                     android:textSize="12sp" />
-
-                <Button
-                    android:id="@+id/btnEmptySearch"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:background="@drawable/bg_btn_secondary"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:minHeight="38dp"
-                    android:minWidth="112dp"
-                    android:text="@string/devices_empty_action"
-                    android:textColor="@color/btn_text_secondary"
-                    android:textSize="13sp" />
             </LinearLayout>
         </FrameLayout>
 

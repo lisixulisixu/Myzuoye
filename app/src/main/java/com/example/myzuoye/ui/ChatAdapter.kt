@@ -25,6 +25,14 @@ class ChatAdapter : RecyclerView.Adapter<ChatAdapter.VH>() {
 
     private val items = mutableListOf<ChatEntry>()
 
+    /**
+     * 还没播过入场动画的条目 key。
+     *
+     * 只记「新增的那条」：列表重建（[submitAll]）和滚动复用都不会重复播，
+     * 否则每次滚回顶部都会看到气泡重新弹一遍。
+     */
+    private val pendingEntrance = HashSet<String>()
+
     /** 长按某条消息（复制、重发等入口统一走这里） */
     var onEntryLongClick: ((ChatEntry) -> Unit)? = null
 
@@ -32,14 +40,18 @@ class ChatAdapter : RecyclerView.Adapter<ChatAdapter.VH>() {
     fun submitAll(entries: List<ChatEntry>) {
         items.clear()
         items.addAll(entries)
+        pendingEntrance.clear()
         notifyDataSetChanged()
     }
 
     /** 追加一条，列表保持滚动位置由外部处理 */
     fun add(entry: ChatEntry) {
         items.add(entry)
+        pendingEntrance.add(keyOf(entry))
         notifyItemInserted(items.size - 1)
     }
+
+    private fun keyOf(entry: ChatEntry): String = "${entry.at}|${entry.kind}|${entry.text}"
 
     /** 列表当前只有一条占位提示（空态），第一条真消息来了要把它顶掉 */
     fun hintOnly(): Boolean = items.size == 1 && items[0].kind == ChatEntry.Kind.SYSTEM
@@ -101,6 +113,42 @@ class ChatAdapter : RecyclerView.Adapter<ChatAdapter.VH>() {
             onEntryLongClick?.invoke(entry)
             true
         }
+
+        playEntranceIfNew(holder.itemView, entry)
+    }
+
+    /**
+     * 新气泡的入场：轻轻从下方浮上来并放大到位。
+     *
+     * 之前消息是「啪」地直接出现，收到文件时尤其突兀。动画 240ms、位移 8dp，
+     * 只对新插入的条目播一次；文件卡用带弹性的插值，落定时有一下轻微的「盖章」感。
+     */
+    private fun playEntranceIfNew(view: View, entry: ChatEntry) {
+        val density = view.resources.displayMetrics.density
+        if (!pendingEntrance.remove(keyOf(entry))) {
+            // 复用的 View 可能停在动画中途被回收，这里复位，避免显示成半透明错位
+            view.alpha = 1f
+            view.translationY = 0f
+            view.scaleX = 1f
+            view.scaleY = 1f
+            return
+        }
+        view.alpha = 0f
+        view.translationY = 8f * density
+        view.scaleX = 0.96f
+        view.scaleY = 0.96f
+        val animator = view.animate()
+            .alpha(1f)
+            .translationY(0f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .setDuration(if (entry.kind == ChatEntry.Kind.FILE_IN) 300L else 240L)
+        if (entry.kind == ChatEntry.Kind.FILE_IN) {
+            animator.setInterpolator(android.view.animation.OvershootInterpolator(1.2f))
+        } else {
+            animator.setInterpolator(android.view.animation.DecelerateInterpolator(1.6f))
+        }
+        animator.start()
     }
 
     /** 「文件接收完成：xxx，已保存到 …」→ `xxx`；解析不出来就退回原文 */

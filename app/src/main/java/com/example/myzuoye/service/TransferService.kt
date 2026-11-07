@@ -40,7 +40,14 @@ class TransferService : Service() {
             }
             // Android 12+ 在后台时不允许启动前台服务，会抛
             // ForegroundServiceStartNotAllowedException；这里兜住，不能让通知栏保活失败拖垮整个传输。
-            runCatching { context.startForegroundService(intent) }
+            // Android 8.0 以下没有 startForegroundService，直接 startService（前台服务机制也没有）
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            }
         }
 
         fun stop(context: Context) {
@@ -72,7 +79,8 @@ class TransferService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        createChannel()
+        // 通知渠道是 API 26 才有的平台类，低版本不能碰（会 NoClassDefFoundError）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) createChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -113,6 +121,7 @@ class TransferService : Service() {
         return START_STICKY
     }
 
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.O)
     private fun createChannel() {
         val manager = getSystemService(NotificationManager::class.java)
         val channel = NotificationChannel(

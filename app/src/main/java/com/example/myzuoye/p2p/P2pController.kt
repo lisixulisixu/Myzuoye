@@ -205,7 +205,10 @@ class P2pController(context: Context) {
         networkPollRunnable = null
         unbindP2pNetwork()
         stop()
-        runCatching { channel?.close() }
+        // Channel.close() 是 API 27 才有的；更老的系统直接放弃关闭（进程退出时系统回收）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            runCatching { channel?.close() }
+        }
         channel = null
         receiver = null
     }
