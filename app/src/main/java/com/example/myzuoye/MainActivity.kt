@@ -66,6 +66,7 @@ import com.example.myzuoye.ui.TransferProgressView
 import com.example.myzuoye.util.Formatters
 import com.example.myzuoye.weather.WeatherRepository
 import com.example.myzuoye.widget.TransferWidgetProvider
+import com.example.myzuoye.widget.WidgetActions
 import com.example.myzuoye.widget.WidgetState
 import java.io.File
 import java.text.SimpleDateFormat
@@ -339,6 +340,8 @@ class MainActivity : AppCompatActivity() {
         handleShareIntent(intent)
         // 长按图标进来的快捷入口
         handleShortcutIntent(intent)
+        // 桌面小组件点进来的直达动作（发送 / 扫码 / 让对方连我）
+        handleWidgetActionIntent(intent)
 
         // 轻量入场动画：区块依次淡入，不影响任何交互
         playEntranceAnimation()
@@ -428,7 +431,8 @@ class MainActivity : AppCompatActivity() {
             // 小组件：接收中显示文件名、速度和剩余时间（同一文件的高频回调会被去重）
             WidgetState.setTransferring(
                 this, true, TransferManager.receivingFileName, (progress * 100).toInt(),
-                speed, etaSeconds(speed, TransferManager.receivingTotalBytes, progress)
+                speed, etaSeconds(speed, TransferManager.receivingTotalBytes, progress),
+                TransferLog.DIR_RECEIVED
             )
         }
         TransferManager.onReceiveDone = { path ->
@@ -441,7 +445,8 @@ class MainActivity : AppCompatActivity() {
             transferGame?.onProgress(pendingName, progress)
             WidgetState.setTransferring(
                 this, true, pendingName, (progress * 100).toInt(),
-                speed, etaSeconds(speed, TransferManager.sendingTotalBytes, progress)
+                speed, etaSeconds(speed, TransferManager.sendingTotalBytes, progress),
+                TransferLog.DIR_SENT
             )
         }
         TransferManager.onSendDone = { ok ->
@@ -1793,6 +1798,8 @@ class MainActivity : AppCompatActivity() {
         setIntent(intent)
         handleShareIntent(intent)
         handleShortcutIntent(intent)
+        // 应用已在栈里时，小组件的点击会走这里而不是 onCreate
+        handleWidgetActionIntent(intent)
     }
 
     /**
@@ -1813,9 +1820,33 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 桌面小组件点进来时的直达动作。
+     *
+     * 小组件有三个入口需要「一步到位」：发文件、扫码连接、让对方连我。
+     * 如果不处理，点下去只会停在首页，用户还得自己找到对应按钮——桌面快捷入口的意义就没了。
+     *
+     * 延迟 600ms 与 [handleShortcutIntent] 同理：onCreate 阶段窗口还在做入场动画、
+     * 权限对话框也可能正在弹，此时立刻 launch 系统选择器会叠在上面。
+     * extra 读完立刻移除，避免 onNewIntent 复用实例时把同一个动作再执行一遍。
+     */
+    private fun handleWidgetActionIntent(intent: Intent?) {
+        val action = intent?.getStringExtra(WidgetActions.EXTRA_ACTION) ?: return
+        intent.removeExtra(WidgetActions.EXTRA_ACTION)
+        uiHandler.postDelayed({
+            if (isFinishing || isDestroyed) return@postDelayed
+            when (action) {
+                WidgetActions.SEND -> pickFile()
+                WidgetActions.SCAN -> pickQrImage.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+                WidgetActions.PAIR -> showQrPairDialog()
+            }
+        }, 600L)
+    }
+
     /** 读 SAF 的文件名与大小；拿不到时给一个能跑通的默认值 */
-    private fun queryFileInfo(uri: Uri): Pair<String, Long> {
-        var name = getString(R.string.transfer_unknown_file)
+    private fun queryFileInfo(uri: Uri): Pair<String, Long> {        var name = getString(R.string.transfer_unknown_file)
         var size = -1L
         runCatching {
             contentResolver.query(

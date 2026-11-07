@@ -31,6 +31,9 @@ object WidgetState {
     /** 预计剩余秒数，0 表示算不出来（总量未知或速度为 0） */
     private const val KEY_ETA = "eta"
 
+    /** 传输方向：S=发送 R=接收。空表示未知（老版本写入的状态） */
+    private const val KEY_DIR = "transfer_dir"
+
     data class Snapshot(
         val connected: Boolean,
         val transferring: Boolean,
@@ -43,7 +46,9 @@ object WidgetState {
         /** 传输速度（字节/秒），没有在传时为 0 */
         val speed: Int = 0,
         /** 预计剩余秒数，算不出来时为 0 */
-        val etaSeconds: Int = 0
+        val etaSeconds: Int = 0,
+        /** S=发送 R=接收，空=未知 */
+        val direction: String = ""
     )
 
     private fun prefs(context: Context) =
@@ -59,7 +64,8 @@ object WidgetState {
             progress = p.getInt(KEY_PROGRESS, 0).coerceIn(0, 100),
             peer = p.getString(KEY_PEER, "").orEmpty(),
             speed = p.getInt(KEY_SPEED, 0),
-            etaSeconds = p.getInt(KEY_ETA, 0)
+            etaSeconds = p.getInt(KEY_ETA, 0),
+            direction = p.getString(KEY_DIR, "").orEmpty()
         )
     }
 
@@ -95,7 +101,8 @@ object WidgetState {
         name: String = "",
         progress: Int = 0,
         speed: Long = 0L,
-        etaSeconds: Long = 0L
+        etaSeconds: Long = 0L,
+        direction: String = ""
     ) {
         val p = prefs(context)
         val current = p.getBoolean(KEY_TRANSFERRING, false)
@@ -116,6 +123,7 @@ object WidgetState {
             .putInt(KEY_PROGRESS, safeProgress)
             .putInt(KEY_SPEED, safeSpeed)
             .putInt(KEY_ETA, safeEta)
+            .putString(KEY_DIR, if (transferring) direction else "")
             .apply()
         TransferWidgetProvider.refresh(context)
     }

@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Myzuoye</string>
+    <string name="app_name">WiFi 快传</string>
     <string name="photo1_name">应用封面：相拥的两人</string>
 
     <string name="p2p_state_init">Wi-Fi Direct 初始化中…</string>
@@ -221,6 +221,19 @@
     <string name="widget_btn_refresh_desc">立即刷新天气</string>
     <string name="widget_btn_files_desc">查看已接收的文件</string>
     <string name="widget_btn_open_desc">打开 WiFi 快传</string>
+
+    <!-- 小组件快捷动作 -->
+    <string name="widget_btn_send">发送</string>
+    <string name="widget_btn_scan">扫码</string>
+    <string name="widget_btn_pair">连接码</string>
+    <string name="widget_btn_cancel">取消传输</string>
+    <string name="widget_btn_send_desc">选择文件并发送</string>
+    <string name="widget_btn_scan_desc">扫二维码连接对方</string>
+    <string name="widget_btn_pair_desc">显示本机连接码，让对方连过来</string>
+    <string name="widget_btn_cancel_desc">中断当前传输</string>
+    <string name="widget_cancel_done">已取消传输</string>
+    <string name="widget_cancel_idle">当前没有正在进行的传输</string>
+    <string name="widget_addr_unknown">未连 Wi-Fi</string>
 
     <!-- 小组件天气 -->
     <string name="widget_temp">%1$d°</string>

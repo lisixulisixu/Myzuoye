@@ -90,6 +90,27 @@ object TransferLog {
     fun latestByName(context: Context, name: String): Entry? =
         all(context).firstOrNull { it.name == name }
 
+    /**
+     * 只取最新一条，不构建整个列表。
+     *
+     * 桌面小组件的状态行每次刷新都会问一次「最近传了什么」，
+     * 而记录上限是 200 条——这里只读数组第 0 个元素，不为主屏上一行字解析全量。
+     */
+    fun latest(context: Context): Entry? {
+        val raw = prefs(context).getString(KEY_ITEMS, null) ?: return null
+        val array = runCatching { JSONArray(raw) }.getOrNull() ?: return null
+        val obj = array.optJSONObject(0) ?: return null
+        val name = obj.optString("name")
+        if (name.isEmpty()) return null
+        return Entry(
+            name = name,
+            size = obj.optLong("size", -1L),
+            dir = obj.optString("dir", DIR_RECEIVED),
+            at = obj.optLong("at", 0L),
+            md5 = obj.optString("md5")
+        )
+    }
+
     fun clear(context: Context) {
         prefs(context).edit().remove(KEY_ITEMS).apply()
     }

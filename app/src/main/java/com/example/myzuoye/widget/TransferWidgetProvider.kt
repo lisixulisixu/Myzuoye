@@ -14,6 +14,9 @@ import android.widget.RemoteViews
 import com.example.myzuoye.MainActivity
 import com.example.myzuoye.R
 import com.example.myzuoye.ReceivedFilesActivity
+import com.example.myzuoye.net.LanAddress
+import com.example.myzuoye.transfer.TransferLog
+import com.example.myzuoye.transfer.TransferManager
 import com.example.myzuoye.util.Formatters
 import com.example.myzuoye.weather.WeatherCondition
 import com.example.myzuoye.weather.WeatherRepository
@@ -63,16 +66,35 @@ class TransferWidgetProvider : AppWidgetProvider() {
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
-        if (intent.action == ACTION_REFRESH_WEATHER) {
-            // 用户点了城市行：跳过节流强制刷新，卡片上会显示新的时间
-            WeatherRepository.refreshAsync(context, force = true)
-            refresh(context)
+        when (intent.action) {
+            ACTION_REFRESH_WEATHER -> {
+                // 用户点了城市行：跳过节流强制刷新，卡片上会显示新的时间
+                WeatherRepository.refreshAsync(context, force = true)
+                refresh(context)
+            }
+
+            ACTION_CANCEL_TRANSFER -> {
+                // 用户点了「取消」就一定要离开传输态，所以这里**无条件**清位，再尽力让传输层中止。
+                //
+                // 为什么要无条件：传输可能已经异常结束（socket 卡住、对端掉线），
+                // 此时 TransferManager.sending 已是 false，cancelActive() 返回 false；
+                // 如果只在成功时才清位，卡片会永远停在「接收中 85%」，只能重新放一次卡片。
+                //
+                // cancelActive() 内部要抢写锁（可能正卡在一次阻塞写里），放后台线程执行，
+                // 别让广播接收器的主线程跟着等——否则桌面点击会像「没反应」。
+                WidgetState.setTransferring(context, false)
+                refresh(context)
+                Thread { runCatching { TransferManager.cancelActive() } }.start()
+            }
         }
     }
 
     companion object {
         /** 点城市行触发的手动刷新 */
         const val ACTION_REFRESH_WEATHER = "com.example.myzuoye.widget.REFRESH_WEATHER"
+
+        /** 点「取消传输」触发的中断 */
+        const val ACTION_CANCEL_TRANSFER = "com.example.myzuoye.widget.CANCEL_TRANSFER"
 
         /** 已连接：绿色 */
         private const val COLOR_ONLINE = 0xFF34C759.toInt()
@@ -202,6 +224,8 @@ class TransferWidgetProvider : AppWidgetProvider() {
             val detailText: String,
             val transferring: Boolean,
             val progress: Int,
+            /** 连接状态：决定状态行点击是「进已收文件」还是「显示连接码」 */
+            val connected: Boolean,
             val showTitle: Boolean,
             val showCity: Boolean,
             val celestialSizePx: Int,
@@ -287,8 +311,13 @@ class TransferWidgetProvider : AppWidgetProvider() {
             val dotColor: Int
             when {
                 snap.transferring -> {
+                    // 发送和接收是两件事：之前一律显示「接收中」，
+                    // 用户在往外发文件时看到「接收中 88%」会以为搞反了
+                    val sending = snap.direction == TransferLog.DIR_SENT
                     statusText = context.getString(
-                        R.string.widget_status_receiving_short, snap.progress
+                        if (sending) R.string.widget_status_sending_short
+                        else R.string.widget_status_receiving_short,
+                        snap.progress
                     )
                     dotColor = COLOR_TRANSFER
                 }
@@ -308,8 +337,8 @@ class TransferWidgetProvider : AppWidgetProvider() {
                 }
             }
 
-            val secondLine = if (snap.transferring && snap.transferName.isNotBlank()) {
-                buildString {
+            val secondLine = when {
+                snap.transferring && snap.transferName.isNotBlank() -> buildString {
                     append(snap.transferName)
                     if (snap.speed > 0) {
                         append(" · ").append(Formatters.speed(snap.speed.toLong()))
@@ -318,8 +347,14 @@ class TransferWidgetProvider : AppWidgetProvider() {
                         }
                     }
                 }
-            } else {
-                context.getString(R.string.widget_received, snap.receivedCount)
+
+                // 没连上时把本机地址顶到明面上：对方看到卡片就能直接手输，
+                // 不用进应用翻菜单找「局域网直连」
+                !snap.connected -> LanAddress.primaryIpv4()
+                    ?.let { "$it:${TransferManager.port}" }
+                    ?: context.getString(R.string.widget_addr_unknown)
+
+                else -> recentLine(context, snap)
             }
 
             // 大卡的第二行细节：日出日落 / 紫外线 / 体感，没有数据就不占地方
@@ -375,6 +410,7 @@ class TransferWidgetProvider : AppWidgetProvider() {
                 detailText = detailText,
                 transferring = snap.transferring,
                 progress = snap.progress,
+                connected = snap.connected,
                 showTitle = !compact,
                 showCity = !compact && heightDp >= 100,
                 celestialSizePx = celestialSizePx,
@@ -386,6 +422,21 @@ class TransferWidgetProvider : AppWidgetProvider() {
         private fun isSystemNight(context: Context): Boolean {
             val mode = context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
             return mode == Configuration.UI_MODE_NIGHT_YES
+        }
+
+        /**
+         * 待机时状态行右侧显示什么。
+         *
+         * 「已收 12 个」是个几乎不动的数字，看久了没有信息量；
+         * 「↓ 照片.jpg · 2.4 MB」能直接告诉用户刚才发生了什么，
+         * 没有记录时才退回累计数。
+         */
+        private fun recentLine(context: Context, snap: WidgetState.Snapshot): String {
+            val last = TransferLog.latest(context)
+                ?: return context.getString(R.string.widget_received, snap.receivedCount)
+            val arrow = if (last.dir == TransferLog.DIR_SENT) "↑" else "↓"
+            val size = if (last.size > 0) " · ${Formatters.size(last.size)}" else ""
+            return "$arrow ${last.name}$size"
         }
 
         // -------------------------------------------------------------- 渲染
@@ -472,13 +523,11 @@ class TransferWidgetProvider : AppWidgetProvider() {
 
             setProgress(views, model)
 
-            // 整张卡片进应用；状态行直接进「已收文件」；城市行刷新天气
+            // 整张卡片进应用；城市行刷新天气
             views.setOnClickPendingIntent(R.id.widgetRoot, activityIntent(context, 1, null))
-            views.setOnClickPendingIntent(
-                R.id.widgetStatusRow,
-                activityIntent(context, 2, ReceivedFilesActivity::class.java)
-            )
             views.setOnClickPendingIntent(R.id.widgetCity, refreshIntent(context))
+            // 状态行：已连接进「已收文件」，未连接时亮出连接码让对方扫/手输
+            views.setOnClickPendingIntent(R.id.widgetStatusRow, statusRowIntent(context, model))
             return views
         }
 
@@ -509,9 +558,11 @@ class TransferWidgetProvider : AppWidgetProvider() {
             if (full) {
                 val density = context.resources.displayMetrics.density
                 val chartW = (model.widthPx - 26f * density).toInt()
-                val chartH = (model.heightPx * 0.30f)
+                // 卡片高度里，标题/天气/详情/状态/按钮大约占掉 150dp，剩下的才是曲线区。
+                // 原来是 0.30，比实际可用空间小一半，位图被拉开后文字明显变形
+                val chartH = (model.heightPx * 0.38f)
                     .toInt()
-                    .coerceIn((54f * density).toInt(), (104f * density).toInt())
+                    .coerceIn((54f * density).toInt(), (150f * density).toInt())
                 val chart = HourlyChartRenderer.render(
                     widthPx = chartW,
                     heightPx = chartH,
@@ -552,13 +603,29 @@ class TransferWidgetProvider : AppWidgetProvider() {
 
             setProgress(views, model)
 
-            // 快捷按钮：刷新天气 / 已收文件 / 打开应用
-            views.setOnClickPendingIntent(R.id.widgetBtnRefresh, refreshIntent(context, 3))
-            views.setOnClickPendingIntent(
-                R.id.widgetBtnFiles,
-                activityIntent(context, 4, ReceivedFilesActivity::class.java)
-            )
-            views.setOnClickPendingIntent(R.id.widgetBtnOpen, activityIntent(context, 5, null))
+            // 快捷按钮：空闲是「发送 / 扫码 / 已收」，传输中整排换成「取消传输」。
+            // 两条分支都要显式设可见性——RemoteViews 会复用上一次提交的状态。
+            if (model.transferring) {
+                views.setViewVisibility(R.id.widgetBtnRow, View.GONE)
+                views.setViewVisibility(R.id.widgetBtnCancel, View.VISIBLE)
+                views.setOnClickPendingIntent(R.id.widgetBtnCancel, cancelIntent(context))
+            } else {
+                views.setViewVisibility(R.id.widgetBtnRow, View.VISIBLE)
+                views.setViewVisibility(R.id.widgetBtnCancel, View.GONE)
+                views.setOnClickPendingIntent(
+                    R.id.widgetBtnSend,
+                    activityIntent(context, 6, null, WidgetActions.SEND)
+                )
+                views.setOnClickPendingIntent(
+                    R.id.widgetBtnScan,
+                    activityIntent(context, 7, null, WidgetActions.SCAN)
+                )
+                views.setOnClickPendingIntent(
+                    R.id.widgetBtnFiles,
+                    activityIntent(context, 4, ReceivedFilesActivity::class.java)
+                )
+            }
+            views.setOnClickPendingIntent(R.id.widgetStatusRow, statusRowIntent(context, model))
             views.setOnClickPendingIntent(R.id.widgetRoot, activityIntent(context, 1, null))
             return views
         }
@@ -594,9 +661,25 @@ class TransferWidgetProvider : AppWidgetProvider() {
             }
         }
 
-        private fun activityIntent(context: Context, requestCode: Int, target: Class<*>?): PendingIntent {
+        /**
+         * 跳应用的点击。
+         *
+         * [widgetAction] 非空时带一个 extra，MainActivity 收到后会直接执行对应动作
+         * （发文件 / 扫码 / 显示连接码），而不是停在首页——桌面入口的价值就在「一步到位」。
+         * 带 extra 的点击必须用不同的 requestCode，否则同一 PendingIntent 会被
+         * FLAG_UPDATE_CURRENT 改写成最后一次的 extra。
+         */
+        private fun activityIntent(
+            context: Context,
+            requestCode: Int,
+            target: Class<*>?,
+            widgetAction: String? = null
+        ): PendingIntent {
             val intent = Intent(context, target ?: MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                if (widgetAction != null) {
+                    putExtra(WidgetActions.EXTRA_ACTION, widgetAction)
+                }
             }
             return PendingIntent.getActivity(
                 context,
@@ -613,6 +696,32 @@ class TransferWidgetProvider : AppWidgetProvider() {
             return PendingIntent.getBroadcast(
                 context,
                 requestCode,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        }
+
+        /**
+         * 状态行点击。
+         *
+         * 已连接时进「已收文件」最有用；未连接时最有用的动作恰好相反——是让别人连过来，
+         * 所以这里指向连接码面板，而不论什么状态都跳文件列表。
+         */
+        private fun statusRowIntent(context: Context, model: Model): PendingIntent =
+            if (model.connected) {
+                activityIntent(context, 2, ReceivedFilesActivity::class.java)
+            } else {
+                activityIntent(context, 9, null, WidgetActions.PAIR)
+            }
+
+        /** 传输中的「取消」：发广播回自己，由 [onReceive] 调传输层中断 */
+        private fun cancelIntent(context: Context): PendingIntent {
+            val intent = Intent(context, TransferWidgetProvider::class.java).apply {
+                action = ACTION_CANCEL_TRANSFER
+            }
+            return PendingIntent.getBroadcast(
+                context,
+                8,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )

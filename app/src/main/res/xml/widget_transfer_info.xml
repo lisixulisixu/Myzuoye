@@ -14,7 +14,7 @@
     android:minResizeWidth="70dp"
     android:maxResizeHeight="420dp"
     android:maxResizeWidth="420dp"
-    android:previewLayout="@layout/widget_transfer_large"
+    android:previewLayout="@layout/widget_transfer"
     android:resizeMode="horizontal|vertical"
     android:targetCellHeight="2"
     android:targetCellWidth="4"
