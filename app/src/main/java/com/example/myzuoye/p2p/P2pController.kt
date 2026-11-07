@@ -513,6 +513,18 @@ class P2pController(context: Context) {
         p2pNetwork = null
     }
 
+    /**
+     * 外部把进程网络切回默认后同步这里的记录。
+     *
+     * 场景：组网成功后用户改走局域网直连/扫码（TransferManager.setP2pNetwork(null)
+     * 会解绑进程网络），但这里的 [p2pNetwork] 还留着旧值，
+     * [prepareP2pNetwork] 会因为「已绑定过」提前返回，导致再做 P2P 传输时
+     * 进程仍在默认网络、连 192.168.49.1 直接超时。
+     */
+    fun forgetBoundNetwork() {
+        p2pNetwork = null
+    }
+
     /** 断开：取消正在进行的连接 + 移除分组 */
     fun disconnect() {
         val (mgr, ch) = requireChannel() ?: return

@@ -49,6 +49,7 @@ import com.example.myzuoye.transfer.QrPair
 import com.example.myzuoye.transfer.SendHistory
 import com.example.myzuoye.transfer.SendItem
 import com.example.myzuoye.transfer.SendQueue
+import com.example.myzuoye.transfer.TransferLog
 import com.example.myzuoye.transfer.TransferManager
 import com.example.myzuoye.ui.AppDialog
 import com.example.myzuoye.ui.ChatAdapter
@@ -490,6 +491,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // 界面已销毁，任何延迟任务都不该再跑（比如退出时的协商超时回调）
+        uiHandler.removeCallbacks(connectingTimeout)
+        uiHandler.removeCallbacks(hintHide)
         controller.release()
         // 只有真正退出界面才断开通道，旋转屏幕时保持连接
         if (isFinishing) {
@@ -658,6 +662,7 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.qr_show),
             getString(R.string.qr_scan),
             getString(R.string.send_history),
+            getString(R.string.transfer_log),
             getString(
                 R.string.auto_copy_toggle,
                 getString(if (autoCopyEnabled()) R.string.switch_on else R.string.switch_off)
@@ -679,16 +684,17 @@ class MainActivity : AppCompatActivity() {
                         )
                     )
                     3 -> showSendHistory()
-                    4 -> {
+                    4 -> showTransferLog()
+                    5 -> {
                         val enabled = !autoCopyEnabled()
                         setAutoCopyEnabled(enabled)
                         showHint(
                             getString(if (enabled) R.string.auto_copy_on else R.string.auto_copy_off)
                         )
                     }
-                    5 -> togglePairCode()
-                    6 -> exportLog()
-                    7 -> showGesturesDialog()
+                    6 -> togglePairCode()
+                    7 -> exportLog()
+                    8 -> showGesturesDialog()
                     else -> {
                         TransferManager.clearHistory()
                         renderChat()
@@ -696,6 +702,35 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+            .show()
+    }
+
+    /**
+     * 传输历史：收发成功的记录（落盘保存，重启不丢）。
+     *
+     * 已收文件页只覆盖「别人发给我的」，发送方向和解压后的聊天记录都查不到；
+     * 这里按时间倒序给出最近的完整流水，顺带能看到 MD5 是否一致。
+     */
+    private fun showTransferLog() {
+        if (isFinishing) return
+        val entries = TransferLog.all(this)
+        if (entries.isEmpty()) {
+            toast(getString(R.string.transfer_log_empty))
+            return
+        }
+        val fmt = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+        val items = entries.take(TRANSFER_LOG_SHOWN).map { e ->
+            val arrow = if (e.dir == TransferLog.DIR_SENT) "↑" else "↓"
+            "$arrow ${e.name}\n${Formatters.size(e.size)} · ${fmt.format(Date(e.at))}"
+        }.toTypedArray()
+        AppDialog.builder(this)
+            .setTitle(getString(R.string.transfer_log_title, entries.size))
+            .setItems(items, null)
+            .setNeutralButton(R.string.transfer_log_clear) { _, _ ->
+                TransferLog.clear(this)
+                toast(getString(R.string.transfer_log_cleared))
+            }
+            .setNegativeButton(R.string.dialog_ok, null)
             .show()
     }
 
@@ -744,6 +779,7 @@ class MainActivity : AppCompatActivity() {
      * 选这张图（截图/拍照都行）即可直连并自动完成配对码校验。
      */
     private fun showQrPairDialog() {
+        if (isFinishing) return
         val ip = LanAddress.primaryIpv4()
         if (ip == null) {
             toast(getString(R.string.qr_no_ip))
@@ -798,27 +834,53 @@ class MainActivity : AppCompatActivity() {
             if (uri == null) return@registerForActivityResult
             toast(getString(R.string.qr_decoding))
             Thread {
-                val text = runCatching {
-                    contentResolver.openInputStream(uri)?.use { input ->
-                        val src = android.graphics.BitmapFactory.decodeStream(input)
-                        src?.let { QrImage.decode(it) }
-                    }
-                }.getOrNull() ?: return@Thread runOnUiThread {
-                    toast(getString(R.string.qr_not_found))
-                }
-                val payload = QrPair.decode(text)
+                val text = runCatching { decodeQrFromUri(uri) }.getOrNull()
+                if (isFinishing || isDestroyed) return@Thread
+                val payload = text?.let { QrPair.decode(it) }
                 runOnUiThread {
-                    if (payload == null) {
-                        toast(getString(R.string.qr_not_ours))
-                    } else {
-                        connectViaQr(payload)
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    when {
+                        text == null -> toast(getString(R.string.qr_not_found))
+                        payload == null -> toast(getString(R.string.qr_not_ours))
+                        else -> connectViaQr(payload)
                     }
                 }
             }.start()
         }
 
+    /**
+     * 读 Uri 并识别二维码。
+     *
+     * 手机拍的照片动辄 4000×3000（ARGB 解码后 48MB），直接 `decodeStream` 在低端机上
+     * 会把进程撑爆。先只读尺寸算采样率，再按上限 [QR_DECODE_MAX_PX] 解码——二维码
+     * 通常只占画面一小块，采到 1400px 仍足够识别，内存降到十几 MB。
+     */
+    private fun decodeQrFromUri(uri: Uri): String? {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use {
+            android.graphics.BitmapFactory.decodeStream(it, null, bounds)
+        }
+        val w = bounds.outWidth
+        val h = bounds.outHeight
+        if (w <= 0 || h <= 0) return null
+        var sample = 1
+        while (w / (sample * 2) >= QR_DECODE_MAX_PX && h / (sample * 2) >= QR_DECODE_MAX_PX) {
+            sample *= 2
+        }
+        val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+        val bitmap = contentResolver.openInputStream(uri)
+            ?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
+            ?: return null
+        return try {
+            QrImage.decode(bitmap)
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
     /** 二维码解析成功：带码直连。配对码顺手存起来，下次重启仍生效 */
     private fun connectViaQr(payload: QrPair.Payload) {
+        if (isFinishing) return
         val code = payload.pairCode
         if (code != null) {
             prefs().edit().putString(KEY_PAIR_CODE, code).apply()
@@ -1384,6 +1446,9 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT < 29) return
         val cm = getSystemService(ConnectivityManager::class.java) ?: return
         runCatching { cm.bindProcessToNetwork(null) }
+        // 同步清掉 P2pController 的记录，否则它以为还绑着 P2P 网络，
+        // 下次组网前的 prepareP2pNetwork 会提前返回、不重新绑定
+        controller.forgetBoundNetwork()
     }
 
     /** 作为服务端在局域网上监听，等对方输入本机地址连过来 */
@@ -2047,6 +2112,12 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val KEY_PERMISSION_ASKED = "permission_asked"
+
+        /** 二维码识别时的位图上限边长：够识别，又不至于把大图整张解出来 */
+        const val QR_DECODE_MAX_PX = 1400
+
+        /** 传输历史弹窗最多列几条（再多屏幕放不下、也点不过来） */
+        const val TRANSFER_LOG_SHOWN = 30
 
         /** SharedPreferences 文件名与「传输时不玩小游戏」偏好的 key */
         const val PREFS_NAME = "myzuoye_prefs"

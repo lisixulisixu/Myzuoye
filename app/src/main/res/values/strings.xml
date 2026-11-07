@@ -257,4 +257,11 @@
     <!-- 已收文件页搜索 -->
     <string name="files_search_hint">搜索文件名…</string>
     <string name="files_empty_search">没有匹配的文件，换个关键词试试</string>
+
+    <!-- 传输历史 -->
+    <string name="transfer_log">传输历史</string>
+    <string name="transfer_log_title">传输历史（%1$d 条）</string>
+    <string name="transfer_log_empty">还没有传输记录：传一个文件试试</string>
+    <string name="transfer_log_clear">清空记录</string>
+    <string name="transfer_log_cleared">传输历史已清空</string>
 </resources>

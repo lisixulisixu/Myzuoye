@@ -2,6 +2,7 @@ package com.example.myzuoye.transfer
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
 import com.google.zxing.MultiFormatReader
@@ -44,7 +45,12 @@ object QrImage {
         val pixels = IntArray(width * height)
         bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
         val source = RGBLuminanceSource(width, height, pixels)
-        val hints = mapOf(DecodeHintType.TRY_HARDER to true)
+        // 限定二维码格式：TRY_HARDER 会顺带尝试一维条码的解析路径，
+        // 对纯二维码场景是纯浪费（耗时约翻倍），还容易在纹理丰富的照片上误判
+        val hints = mapOf(
+            DecodeHintType.TRY_HARDER to true,
+            DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE)
+        )
         MultiFormatReader().apply { setHints(hints) }
             .decode(BinaryBitmap(HybridBinarizer(source)))
             .text
