@@ -344,21 +344,16 @@
                     android:visibility="gone" />
             </LinearLayout>
 
-            <ScrollView
-                android:id="@+id/svChat"
+            <!-- 聊天气泡列表：右下角圆角收窄的气泡语言；长按可复制/重发 -->
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rvChat"
                 android:layout_width="match_parent"
-                android:layout_height="84dp"
-                android:layout_marginTop="6dp">
-
-                <TextView
-                    android:id="@+id/tvChat"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:lineSpacingExtra="2dp"
-                    android:text="@string/chat_empty"
-                    android:textColor="@color/text_primary"
-                    android:textSize="12.5sp" />
-            </ScrollView>
+                android:layout_height="104dp"
+                android:layout_marginTop="6dp"
+                android:clipToPadding="false"
+                android:paddingBottom="2dp"
+                android:paddingTop="2dp"
+                android:overScrollMode="never" />
 
             <LinearLayout
                 android:layout_width="match_parent"

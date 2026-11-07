@@ -39,4 +39,8 @@ object Formatters {
         val m = (seconds % 3600) / 60
         return if (m == 0L) "$h 小时" else "$h 小时 $m 分"
     }
+
+    /** 时间戳 → `14:08` 这样的气泡时间标签 */
+    fun clockTime(epochMillis: Long): String =
+        java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date(epochMillis))
 }

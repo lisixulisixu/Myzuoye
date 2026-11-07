@@ -25,7 +25,6 @@ import android.widget.ProgressBar
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
@@ -41,12 +40,14 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.myzuoye.net.LanAddress
 import com.example.myzuoye.p2p.P2pController
+import com.example.myzuoye.transfer.ChatEntry
 import com.example.myzuoye.transfer.PartialStore
 import com.example.myzuoye.transfer.SendHistory
 import com.example.myzuoye.transfer.SendItem
 import com.example.myzuoye.transfer.SendQueue
 import com.example.myzuoye.transfer.TransferManager
 import com.example.myzuoye.ui.AppDialog
+import com.example.myzuoye.ui.ChatAdapter
 import com.example.myzuoye.ui.ConnectionStepsView
 import com.example.myzuoye.ui.CoverLiveView
 import com.example.myzuoye.ui.DeviceAdapter
@@ -115,8 +116,8 @@ class MainActivity : AppCompatActivity() {
     private var channelState = TransferManager.State.IDLE
 
     private lateinit var tvChannelState: TextView
-    private lateinit var tvChat: TextView
-    private lateinit var svChat: ScrollView
+    private lateinit var rvChat: RecyclerView
+    private lateinit var chatAdapter: ChatAdapter
     private lateinit var etMessage: EditText
     private lateinit var btnSend: Button
 
@@ -404,9 +405,9 @@ class MainActivity : AppCompatActivity() {
 
         // 通道回调只在界面可见时挂载，避免 Activity 泄漏
         TransferManager.onStateChanged = { state, message -> renderChannelState(state, message) }
-        TransferManager.onMessage = { line ->
-            appendChat(line)
-            maybeAutoCopy(line)
+        TransferManager.onMessage = { entry ->
+            appendChat(entry)
+            maybeAutoCopy(entry)
         }
         // 对端开了配对码校验、我们的码不对：弹框要码
         TransferManager.onPairRejected = { reason -> showPairCodePrompt(reason) }
@@ -523,8 +524,14 @@ class MainActivity : AppCompatActivity() {
         btnEmptySearch = findViewById(R.id.btnEmptySearch)
 
         tvChannelState = findViewById(R.id.tvChannelState)
-        tvChat = findViewById(R.id.tvChat)
-        svChat = findViewById(R.id.svChat)
+        rvChat = findViewById(R.id.rvChat)
+        chatAdapter = ChatAdapter().apply {
+            onEntryLongClick = { entry -> showChatEntryActions(entry) }
+        }
+        rvChat.layoutManager = LinearLayoutManager(this).apply {
+            stackFromEnd = true
+        }
+        rvChat.adapter = chatAdapter
         etMessage = findViewById(R.id.etMessage)
         btnSend = findViewById(R.id.btnSend)
 
@@ -798,14 +805,14 @@ class MainActivity : AppCompatActivity() {
     /**
      * 收到文本后按开关决定是否进剪贴板。
      *
-     * 只处理对端发来的行（带 [TransferManager.PEER_PREFIX]），
+     * 只处理对端发来的消息（kind == PEER），
      * 自己发的、系统提示（已连接 / 已收到文件）一律跳过，
      * 否则剪贴板里会莫名其妙多出「通道已建立」这种话。
      */
-    private fun maybeAutoCopy(line: String) {
+    private fun maybeAutoCopy(entry: ChatEntry) {
         if (!autoCopyEnabled()) return
-        if (!line.startsWith(TransferManager.PEER_PREFIX)) return
-        val text = line.removePrefix(TransferManager.PEER_PREFIX).trim()
+        if (entry.kind != ChatEntry.Kind.PEER) return
+        val text = entry.text.trim()
         if (text.isEmpty()) return
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
         runCatching {
@@ -1387,26 +1394,65 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderChat() {
-        val lines = TransferManager.history()
-        tvChat.text = if (lines.isEmpty()) {
-            getString(R.string.chat_empty)
-        } else {
-            lines.joinToString("\n")
-        }
+        val entries = TransferManager.history()
+        chatAdapter.submitAll(
+            if (entries.isEmpty()) {
+                listOf(ChatEntry(ChatEntry.Kind.SYSTEM, getString(R.string.chat_empty)))
+            } else {
+                entries
+            }
+        )
         scrollChatToBottom()
     }
 
-    private fun appendChat(line: String) {
-        if (tvChat.text.toString() == getString(R.string.chat_empty)) {
-            tvChat.text = line
+    /** 追加一条消息并滚到最底；列表为空时先把占位提示顶掉 */
+    private fun appendChat(entry: ChatEntry) {
+        // 恢复历史后只有一条占位提示的场景：第一条真消息来时把它顶掉
+        if (chatAdapter.itemCount == 1 &&
+            chatAdapter.hintOnly()
+        ) {
+            chatAdapter.submitAll(listOf(entry))
         } else {
-            tvChat.append("\n$line")
+            chatAdapter.add(entry)
         }
         scrollChatToBottom()
     }
 
     private fun scrollChatToBottom() {
-        svChat.post { svChat.fullScroll(View.FOCUS_DOWN) }
+        rvChat.post {
+            val count = chatAdapter.itemCount
+            if (count > 0) rvChat.smoothScrollToPosition(count - 1)
+        }
+    }
+
+    /**
+     * 长按一条消息：复制；自己发的且通道还在时可以重发。
+     * 复制走剪贴板，不弹全屏对话框以外的任何东西。
+     */
+    private fun showChatEntryActions(entry: ChatEntry) {
+        val items = mutableListOf(
+            getString(R.string.chat_copy) to Runnable {
+                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return@Runnable
+                runCatching {
+                    cm.setPrimaryClip(ClipData.newPlainText(getString(R.string.app_name), entry.text))
+                }.onSuccess { showHint(getString(R.string.chat_copied), HintKind.SUCCESS) }
+            }
+        )
+        if (entry.kind == ChatEntry.Kind.MINE && TransferManager.isConnected) {
+            items += getString(R.string.chat_resend) to Runnable {
+                if (TransferManager.send(entry.text)) {
+                    showHint(getString(R.string.chat_resent), HintKind.INFO)
+                } else {
+                    showHint(getString(R.string.channel_not_ready), HintKind.ERROR)
+                }
+            }
+        }
+        AppDialog.builder(this)
+            .setTitle(R.string.chat_actions_title)
+            .setItems(items.map { it.first }.toTypedArray()) { _, which ->
+                items[which].second.run()
+            }
+            .show()
     }
 
     // ------------------------------------------------------------------ 文件传输

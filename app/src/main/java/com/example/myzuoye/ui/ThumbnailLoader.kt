@@ -34,11 +34,23 @@ object ThumbnailLoader {
         return mime.startsWith("image/") || mime.startsWith("video/")
     }
 
-    fun load(context: Context, uri: Uri, name: String, target: ImageView) {
+    /**
+     * @param onResult 加载完成回调（true 成功 / false 失败），主线程回调。
+     *   只在 target 还显示着这个 uri 时回调；列表复用后对不上号就不回调。
+     *   聊天文件卡用它把加载失败的占位区收起来。
+     */
+    fun load(
+        context: Context,
+        uri: Uri,
+        name: String,
+        target: ImageView,
+        onResult: ((Boolean) -> Unit)? = null
+    ) {
         val key = "$uri@${target.width}x${target.height}"
         cache.get(key)?.let {
             target.tag = key
             target.setImageBitmap(it)
+            onResult?.invoke(true)
             return
         }
 
@@ -48,11 +60,13 @@ object ThumbnailLoader {
         val appContext = context.applicationContext
         executor.execute {
             val bitmap = decode(appContext, uri, name)
-            if (bitmap == null) return@execute
-            cache.put(key, bitmap)
+            if (bitmap != null) cache.put(key, bitmap)
             target.post {
                 // 复用后这一格可能已经换成别的文件了，对不上就别贴
-                if (target.tag == key) target.setImageBitmap(bitmap)
+                if (target.tag == key) {
+                    if (bitmap != null) target.setImageBitmap(bitmap)
+                    onResult?.invoke(bitmap != null)
+                }
             }
         }
     }

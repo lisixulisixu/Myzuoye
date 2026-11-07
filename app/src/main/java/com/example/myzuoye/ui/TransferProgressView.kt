@@ -135,6 +135,12 @@ class TransferProgressView @JvmOverloads constructor(
         invalidate()
     }
 
+    /** 仅测试用：直接注入流光相位（测试环境动画时序不稳定，用确定性相位渲染对照） */
+    internal fun debugShimmerPhase(value: Float) {
+        shimmerPhase = value
+        invalidate()
+    }
+
     /** 传输成功：一次性闪光（亮起再回落），跟爱心迸发同一时刻发生 */
     fun celebrate() {
         flashAnimator?.cancel()

@@ -182,7 +182,7 @@ object TransferManager {
     /** 续传握手：发送端在这里等接收端告知「我已经有多少字节」 */
     private val resumeQueue = LinkedBlockingQueue<Long>()
 
-    private val messageBuffer = mutableListOf<String>()
+    private val messageBuffer = mutableListOf<ChatEntry>()
 
     /**
      * 正在接收的文件落盘目标；同一时刻只允许一个接收任务。
@@ -239,7 +239,8 @@ object TransferManager {
         private set
 
     var onStateChanged: ((State, String) -> Unit)? = null
-    var onMessage: ((String) -> Unit)? = null
+    /** 每条聊天消息的结构化回调（方向 + 时间），界面据此摆气泡 */
+    var onMessage: ((ChatEntry) -> Unit)? = null
 
     val isConnected: Boolean get() = state == State.CONNECTED
 
@@ -248,7 +249,7 @@ object TransferManager {
         private set
 
     /** 历史消息（最多保留 [MAX_HISTORY] 条），界面重建时用它恢复聊天区 */
-    fun history(): List<String> = synchronized(messageBuffer) { messageBuffer.toList() }
+    fun history(): List<ChatEntry> = synchronized(messageBuffer) { messageBuffer.toList() }
 
     // ------------------------------------------------------------------ 服务端
 
@@ -484,7 +485,7 @@ object TransferManager {
         scope.launch {
             try {
                 synchronized(writeLock) { TransferProtocol.writeText(out, text) }
-                appendAndNotify("我：$text")
+                appendAndNotify(text, ChatEntry.Kind.MINE)
             } catch (e: Exception) {
                 emit(State.ERROR, "发送失败：${e.message}")
             }
@@ -605,7 +606,7 @@ object TransferManager {
                 when (frame.type) {
                     TransferProtocol.TYPE_TEXT -> {
                         val text = frame.asText()
-                        if (text.isNotBlank()) appendAndNotify("$PEER_PREFIX$text")
+                        if (text.isNotBlank()) appendAndNotify(text, ChatEntry.Kind.PEER)
                     }
 
                     TransferProtocol.TYPE_FILE_HEADER -> handleFileHeader(frame, out)
@@ -850,7 +851,22 @@ object TransferManager {
 
         if (ok) {
             if (target.commit()) {
-                appendAndNotify("文件接收完成：${target.fileName}，已保存到 ${target.displayPath}")
+                // 图片/视频直接给一张卡片（带缩略图）；查不到 Uri 就退回纯文字行，
+                // 查询失败不影响传输结果的展示
+                val fileUri = appContext?.let { ctx ->
+                    runCatching {
+                        ReceivedFileStore.list(ctx).firstOrNull { it.name == target.fileName }?.uri
+                    }.getOrNull()
+                }?.toString()
+                if (fileUri != null) {
+                    appendAndNotify(
+                        "文件接收完成：${target.fileName}，已保存到 ${target.displayPath}",
+                        ChatEntry.Kind.FILE_IN,
+                        fileUri
+                    )
+                } else {
+                    appendAndNotify("文件接收完成：${target.fileName}，已保存到 ${target.displayPath}")
+                }
                 mainHandler.post { onReceiveDone?.invoke(target.displayPath) }
             } else {
                 // 收是收完了，只是从半成品复制进下载目录时失败。
@@ -1166,12 +1182,17 @@ object TransferManager {
         }
     }
 
-    private fun appendAndNotify(line: String) {
+    private fun appendAndNotify(
+        line: String,
+        kind: ChatEntry.Kind = ChatEntry.Kind.SYSTEM,
+        fileUri: String? = null
+    ) {
+        val entry = ChatEntry(kind, line, fileUri = fileUri)
         synchronized(messageBuffer) {
-            messageBuffer.add(line)
+            messageBuffer.add(entry)
             while (messageBuffer.size > MAX_HISTORY) messageBuffer.removeAt(0)
         }
-        mainHandler.post { onMessage?.invoke(line) }
+        mainHandler.post { onMessage?.invoke(entry) }
     }
 
     private fun emit(newState: State, message: String) {
@@ -1224,8 +1245,6 @@ object TransferManager {
     /** 已有连接时回给第二个接入方的话，对端会直接显示在聊天区 */
     private const val BUSY_MESSAGE = "对方已有其它设备连接，请稍后再试"
 
-    /** 聊天区里「对方发来的文本」的统一前缀，界面靠它区分收发 */
-    const val PEER_PREFIX = "对方："
     private const val BIND_RETRIES = 3
     private const val BIND_RETRY_DELAY_MS = 300L
 }

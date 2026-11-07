@@ -30,6 +30,12 @@
     <string name="channel_connected">文本通道：已连接</string>
     <string name="channel_error">文本通道：出错</string>
     <string name="chat_empty">（暂无消息，P2P 连上后即可互发文本）</string>
+    <string name="chat_actions_title">消息操作</string>
+    <string name="chat_copy">复制文本</string>
+    <string name="chat_copied">已复制到剪贴板</string>
+    <string name="chat_resend">重发这条消息</string>
+    <string name="chat_resent">已重发</string>
+    <string name="chat_file_thumb">收到的文件缩略图</string>
     <string name="hint_message">输入要发送的文字</string>
     <string name="channel_not_ready">文本通道还没建立</string>
 

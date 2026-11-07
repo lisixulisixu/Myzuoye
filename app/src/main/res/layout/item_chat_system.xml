@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 系统状态行：居中小字，不占气泡（连接建立/断开/续传提示这类） -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/tvText"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center"
+    android:paddingBottom="3dp"
+    android:paddingEnd="12dp"
+    android:paddingStart="12dp"
+    android:paddingTop="3dp"
+    android:textColor="@color/text_secondary"
+    android:textSize="11sp" />

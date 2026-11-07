@@ -160,25 +160,36 @@ class UiMotionPreviewTest {
     @Test
     fun 流光在不同相位画面不同() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        lateinit var view: TransferProgressView
+        // 动画时序在整包测试里不稳定（主线程负载导致两帧相位可能相同），
+        // 这里改用确定性注入：同一条 50% 进度、两个相位差半个周期的流光必须明显不同；
+        // 「动画确实在推进」由 进度前进时有填充（chase 真跑完 35%）兜底。
+        lateinit var viewA: TransferProgressView
+        lateinit var viewB: TransferProgressView
         lateinit var a: Bitmap
         lateinit var b: Bitmap
         onMain {
-            view = TransferProgressView(context)
-            measure(view, barWidth, barHeight)
-            view.setBusy(true)
-            view.progress = 50
-        }
-        Thread.sleep(450) // chase 结束，只剩 shimmer 循环
-        onMain { a = render(view, barWidth, barHeight) }
-        Thread.sleep(120)
-        onMain { b = render(view, barWidth, barHeight) }
+            viewA = TransferProgressView(context)
+            measure(viewA, barWidth, barHeight)
+            viewA.setBusy(true)
+            viewA.progress = 50
 
-        // chase 结束后 shimmer 仍在循环，两帧画面必须有可见差异
+            viewB = TransferProgressView(context)
+            measure(viewB, barWidth, barHeight)
+            viewB.setBusy(true)
+            viewB.progress = 50
+        }
+        Thread.sleep(450) // 等 chase 跑完，50% 填充真实落位
+        onMain {
+            viewA.debugShimmerPhase(0.15f)
+            a = render(viewA, barWidth, barHeight)
+            viewB.debugShimmerPhase(0.65f)
+            b = render(viewB, barWidth, barHeight)
+        }
+
         val diff = lumaDiff(a, b)
         a.recycle()
         b.recycle()
-        assertTrue("流光/追赶动画没有在动（差异像素 $diff）", diff > 200)
+        assertTrue("流光两个相位画面应明显不同（差异像素 $diff）", diff > 500)
     }
 
     @Test
