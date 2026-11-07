@@ -94,6 +94,25 @@
             </LinearLayout>
         </HorizontalScrollView>
 
+        <!-- 按文件名搜索。类型筛选和搜索叠加生效：
+             chip 圈大类，搜索框在类内精确找，传过几十个文件后靠它救 -->
+        <EditText
+            android:id="@+id/etFilesSearch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginHorizontal="12dp"
+            android:layout_marginBottom="8dp"
+            android:background="@drawable/bg_input"
+            android:hint="@string/files_search_hint"
+            android:imeOptions="actionSearch"
+            android:inputType="text"
+            android:maxLines="1"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="10dp"
+            android:textColor="@color/text_primary"
+            android:textColorHint="@color/text_secondary"
+            android:textSize="14sp" />
+
         <TextView
             android:id="@+id/tvFilesEmpty"
             android:layout_width="match_parent"

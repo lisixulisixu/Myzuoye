@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pInfo
@@ -28,6 +29,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -42,6 +44,8 @@ import com.example.myzuoye.net.LanAddress
 import com.example.myzuoye.p2p.P2pController
 import com.example.myzuoye.transfer.ChatEntry
 import com.example.myzuoye.transfer.PartialStore
+import com.example.myzuoye.transfer.QrImage
+import com.example.myzuoye.transfer.QrPair
 import com.example.myzuoye.transfer.SendHistory
 import com.example.myzuoye.transfer.SendItem
 import com.example.myzuoye.transfer.SendQueue
@@ -651,6 +655,8 @@ class MainActivity : AppCompatActivity() {
         }
         val items = arrayOf(
             getString(R.string.lan_direct),
+            getString(R.string.qr_show),
+            getString(R.string.qr_scan),
             getString(R.string.send_history),
             getString(
                 R.string.auto_copy_toggle,
@@ -666,17 +672,23 @@ class MainActivity : AppCompatActivity() {
             .setItems(items) { _, which ->
                 when (which) {
                     0 -> showLanDirectDialog()
-                    1 -> showSendHistory()
-                    2 -> {
+                    1 -> showQrPairDialog()
+                    2 -> pickQrImage.launch(
+                        PickVisualMediaRequest(
+                            ActivityResultContracts.PickVisualMedia.ImageOnly
+                        )
+                    )
+                    3 -> showSendHistory()
+                    4 -> {
                         val enabled = !autoCopyEnabled()
                         setAutoCopyEnabled(enabled)
                         showHint(
                             getString(if (enabled) R.string.auto_copy_on else R.string.auto_copy_off)
                         )
                     }
-                    3 -> togglePairCode()
-                    4 -> exportLog()
-                    5 -> showGesturesDialog()
+                    5 -> togglePairCode()
+                    6 -> exportLog()
+                    7 -> showGesturesDialog()
                     else -> {
                         TransferManager.clearHistory()
                         renderChat()
@@ -721,6 +733,104 @@ class MainActivity : AppCompatActivity() {
     private fun restorePairCode() {
         val saved = prefs().getString(KEY_PAIR_CODE, null).orEmpty()
         TransferManager.setPairCode(saved.ifEmpty { null })
+    }
+
+    // ------------------------------------------------------------------ 扫码配对
+
+    /**
+     * 显示本机的连接二维码。
+     *
+     * 内容是「IP:端口 + 配对码（开了才有）」，对端在「更多操作 → 扫码连接」里
+     * 选这张图（截图/拍照都行）即可直连并自动完成配对码校验。
+     */
+    private fun showQrPairDialog() {
+        val ip = LanAddress.primaryIpv4()
+        if (ip == null) {
+            toast(getString(R.string.qr_no_ip))
+            return
+        }
+        val payload = QrPair.Payload(
+            host = ip,
+            port = TransferManager.port,
+            pairCode = prefs().getString(KEY_PAIR_CODE, null).orEmpty().ifEmpty { null }
+        )
+        val size = (280 * resources.displayMetrics.density).toInt()
+        val qr = runCatching { QrImage.encode(QrPair.encode(payload), size) }.getOrNull()
+        if (qr == null) {
+            toast(getString(R.string.qr_generate_failed))
+            return
+        }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = android.view.Gravity.CENTER_HORIZONTAL
+            val pad = (24 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad / 2, pad, 0)
+        }
+        val codeLabel = payload.pairCode
+            ?.let { getString(R.string.qr_pair_code_label, it) }
+            ?: getString(R.string.qr_pair_code_none)
+        container.addView(TextView(this).apply {
+            text = getString(R.string.qr_addr_label, "$ip:${TransferManager.port}") + "\n" + codeLabel
+            textSize = 13f
+            gravity = android.view.Gravity.CENTER
+        })
+        container.addView(android.widget.ImageView(this).apply {
+            setImageBitmap(qr)
+            val m = (12 * resources.displayMetrics.density).toInt()
+            setPadding(0, m, 0, 0)
+            contentDescription = getString(R.string.qr_show)
+        })
+        AppDialog.builder(this)
+            .setTitle(R.string.qr_show)
+            .setView(container)
+            .setPositiveButton(R.string.dialog_ok, null)
+            .show()
+    }
+
+    /**
+     * 从相册选一张二维码图片并连接。
+     *
+     * 用系统照片选择器（Photo Picker）：不需要存储权限，返回的临时 Uri 本应用就能读。
+     * 解码放后台线程——一张大图缩放 + 识别可能上百毫秒，主线程做会卡住过渡动画。
+     */
+    private val pickQrImage =
+        registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+            if (uri == null) return@registerForActivityResult
+            toast(getString(R.string.qr_decoding))
+            Thread {
+                val text = runCatching {
+                    contentResolver.openInputStream(uri)?.use { input ->
+                        val src = android.graphics.BitmapFactory.decodeStream(input)
+                        src?.let { QrImage.decode(it) }
+                    }
+                }.getOrNull() ?: return@Thread runOnUiThread {
+                    toast(getString(R.string.qr_not_found))
+                }
+                val payload = QrPair.decode(text)
+                runOnUiThread {
+                    if (payload == null) {
+                        toast(getString(R.string.qr_not_ours))
+                    } else {
+                        connectViaQr(payload)
+                    }
+                }
+            }.start()
+        }
+
+    /** 二维码解析成功：带码直连。配对码顺手存起来，下次重启仍生效 */
+    private fun connectViaQr(payload: QrPair.Payload) {
+        val code = payload.pairCode
+        if (code != null) {
+            prefs().edit().putString(KEY_PAIR_CODE, code).apply()
+            TransferManager.setPairCode(code)
+        }
+        TransferManager.stop()
+        TransferManager.setP2pNetwork(null)
+        unbindProcessNetwork()
+        // 局域网/转发链路 RTT 远大于 P2P（如模拟器 adb 转发），放宽单次超时
+        TransferManager.connect(payload.host, payload.port, timeoutMs = 5000)
+        log(getString(R.string.qr_connect_log, payload.host, payload.port))
+        showHint(getString(R.string.qr_connect_hint, payload.host))
     }
 
     /**
@@ -1194,6 +1304,7 @@ class MainActivity : AppCompatActivity() {
                     1 -> {
                         TransferManager.stop()
                         TransferManager.setP2pNetwork(null)
+                        unbindProcessNetwork()
                         TransferManager.startServer()
                         log("调试：开始监听 ${TransferManager.port}")
                     }
@@ -1261,11 +1372,26 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    /**
+     * 局域网通道前解除进程级网络绑定。
+     *
+     * P2P 组网成功时进程被绑到 P2P 网络（prepareP2pNetwork）；之后改走
+     * 局域网直连/扫码连接时，仅解 socket 绑定不够——进程默认路由还留在
+     * 已死（或不存在局域网路由）的 P2P 网络里，连 10.0.2.2 / 局域网 IP
+     * 都会失败。这里无条件绑回系统默认网络。
+     */
+    private fun unbindProcessNetwork() {
+        if (Build.VERSION.SDK_INT < 29) return
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        runCatching { cm.bindProcessToNetwork(null) }
+    }
+
     /** 作为服务端在局域网上监听，等对方输入本机地址连过来 */
     private fun listenLan() {
         TransferManager.stop()
         // 局域网通道不绑 P2P 网卡，否则包会被丢进 192.168.49.x 那条路由
         TransferManager.setP2pNetwork(null)
+        unbindProcessNetwork()
         TransferManager.startServer()
         val ip = LanAddress.primaryIpv4()
         val addr = if (ip == null) "本机 IP（未连 Wi-Fi）" else "$ip:${TransferManager.port}"
@@ -1279,7 +1405,9 @@ class MainActivity : AppCompatActivity() {
         val (host, port) = parseHostPort(text)
         TransferManager.stop()
         TransferManager.setP2pNetwork(null)
-        TransferManager.connect(host, port)
+        unbindProcessNetwork()
+        // 局域网/转发链路 RTT 远大于 P2P（如模拟器 adb 转发），放宽单次超时
+        TransferManager.connect(host, port, timeoutMs = 5000)
         log("局域网直连 $host:$port")
     }
 
@@ -1311,8 +1439,9 @@ class MainActivity : AppCompatActivity() {
                 // 调试通道走的是 loopback / adb 转发，不属于 P2P 网络，
                 // 绑着 P2P 网络反而连不通，这里先解绑
                 TransferManager.setP2pNetwork(null)
+                unbindProcessNetwork()
                 log("调试：连接 $host:$port")
-                TransferManager.connect(host, port)
+                TransferManager.connect(host, port, timeoutMs = 5000)
             }
             .setNegativeButton(R.string.dialog_cancel, null)
             .show()

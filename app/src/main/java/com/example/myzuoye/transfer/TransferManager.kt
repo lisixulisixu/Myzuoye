@@ -1,6 +1,7 @@
 package com.example.myzuoye.transfer
 
 import android.content.Context
+import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Handler
 import android.os.Looper
@@ -104,6 +105,18 @@ object TransferManager {
 
     fun setP2pNetwork(network: Network?) {
         p2pNetwork = network
+        // 退出 P2P 模式时把进程绑回系统默认网络。
+        // P2P 组网成功时进程被绑到 192.168.49.x 网络（prepareP2pNetwork），
+        // 之后新建的 socket——包括监听用的 ServerSocket——都归那条网络管：
+        // 局域网模式（10.0.2.2 / Wi-Fi IP）在它的路由表里不存在，连接与
+        // 接入都会失败。socket 级解绑只覆盖客户端一侧，这里在源头兜底。
+        if (network == null) {
+            runCatching {
+                val cm = appContext?.getSystemService(Context.CONNECTIVITY_SERVICE)
+                    as? ConnectivityManager
+                cm?.bindProcessToNetwork(null)
+            }
+        }
     }
 
     /**
@@ -400,7 +413,8 @@ object TransferManager {
         host: String,
         port: Int = TransferProtocol.PORT,
         attempts: Int = 16,
-        auto: Boolean = false
+        auto: Boolean = false,
+        timeoutMs: Int = CONNECT_TIMEOUT_MS
     ) {
         if (state == State.CONNECTED) return
         if (connectJob?.isActive == true) return
@@ -420,7 +434,7 @@ object TransferManager {
                 try {
                     val client = Socket()
                     bindToP2pNetwork(client)
-                    client.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
+                    client.connect(InetSocketAddress(host, port), timeoutMs)
 
                     // 报到：把本机记得的配对码带上。组主开了校验而码不对，
                     // 它会立刻回一个拒绝帧并把连接关掉，走 [readLoop] 里的处理。
@@ -867,6 +881,14 @@ object TransferManager {
                 } else {
                     appendAndNotify("文件接收完成：${target.fileName}，已保存到 ${target.displayPath}")
                 }
+                // 传输记录落盘（接收方向）：重启后历史仍在
+                appContext?.let { ctx ->
+                    runCatching {
+                        TransferLog.record(
+                            ctx, target.fileName, written, TransferLog.DIR_RECEIVED, actualMd5
+                        )
+                    }
+                }
                 mainHandler.post { onReceiveDone?.invoke(target.displayPath) }
             } else {
                 // 收是收完了，只是从半成品复制进下载目录时失败。
@@ -1091,6 +1113,14 @@ object TransferManager {
                     mainHandler.post { onSendDone?.invoke(false) }
                 } else {
                     appendAndNotify("文件已发送：$fileName")
+                    // 传输记录落盘（发送方向）：重启后历史仍在
+                    appContext?.let { ctx ->
+                        runCatching {
+                            TransferLog.record(
+                                ctx, fileName, knownSize, TransferLog.DIR_SENT, md5
+                            )
+                        }
+                    }
                     mainHandler.post { onSendDone?.invoke(true) }
                 }
                 stopService()

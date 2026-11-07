@@ -34,6 +34,9 @@ class ReceivedFilesActivity : AppCompatActivity() {
     /** 当前筛选类型，null 表示全部 */
     private var filter: FileFilter = FileFilter.ALL
 
+    /** 文件名搜索关键词；与类型筛选叠加生效 */
+    private var query: String = ""
+
     /** 全部文件；筛选只作用于视图，不重复查库 */
     private var allFiles: List<ReceivedFileStore.ReceivedFile> = emptyList()
 
@@ -59,6 +62,7 @@ class ReceivedFilesActivity : AppCompatActivity() {
         findViewById<View>(R.id.btnFilesBack).setOnClickListener { finish() }
 
         setupFilters()
+        setupSearch()
         refresh()
     }
 
@@ -94,14 +98,36 @@ class ReceivedFilesActivity : AppCompatActivity() {
         chips.getValue(FileFilter.ALL).isSelected = true
     }
 
+    /** 搜索框：输入即过滤，不用等按搜索键（文件名一般就几个词） */
+    private fun setupSearch() {
+        val input = findViewById<android.widget.EditText>(R.id.etFilesSearch)
+        input.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                query = s?.toString()?.trim().orEmpty()
+                applyFilter()
+            }
+        })
+    }
+
     private fun applyFilter() {
-        val shown = allFiles.filter { filter.matches(it.name) }
+        val q = query.lowercase()
+        val shown = allFiles.filter {
+            filter.matches(it.name) && (q.isEmpty() || it.name.lowercase().contains(q))
+        }
         adapter.submit(shown)
         tvCount.text = getString(R.string.files_count, shown.size)
         val empty = shown.isEmpty()
         tvEmpty.visibility = if (empty) View.VISIBLE else View.GONE
         rvFiles.visibility = if (empty) View.GONE else View.VISIBLE
-        tvEmpty.setText(if (allFiles.isEmpty()) R.string.files_empty else R.string.files_empty_filter)
+        tvEmpty.setText(
+            when {
+                allFiles.isEmpty() -> R.string.files_empty
+                query.isNotEmpty() -> R.string.files_empty_search
+                else -> R.string.files_empty_filter
+            }
+        )
     }
 
     // ------------------------------------------------------------------ 数据

@@ -239,4 +239,22 @@
     <string name="weather_loc_message">桌面小组件会根据你的大致位置显示当前温度和天气，并配上对应的天气特效。\n\n只需要「大致位置」，不会记录或上传你的精确轨迹；不允许也不影响传文件功能，只是小组件不显示天气。</string>
     <string name="weather_loc_allow">允许</string>
     <string name="weather_loc_later">暂不</string>
+
+    <!-- 扫码配对 -->
+    <string name="qr_show">显示连接二维码</string>
+    <string name="qr_scan">扫码连接（从相册选二维码）</string>
+    <string name="qr_no_ip">没有可用的局域网地址：请先连接 Wi-Fi（或建好 P2P 组）再生成二维码</string>
+    <string name="qr_generate_failed">二维码生成失败，请重试</string>
+    <string name="qr_addr_label">本机地址：%1$s</string>
+    <string name="qr_pair_code_label">配对码：%1$s（已编入二维码）</string>
+    <string name="qr_pair_code_none">未开启配对码校验</string>
+    <string name="qr_decoding">正在识别二维码…</string>
+    <string name="qr_not_found">这张图里没有识别到二维码，换一张更清晰的试试</string>
+    <string name="qr_not_ours">识别到了二维码，但不是本应用的连接码</string>
+    <string name="qr_connect_log">扫码连接 %1$s:%2$s</string>
+    <string name="qr_connect_hint">已按二维码连接 %1$s，等待对方确认…</string>
+
+    <!-- 已收文件页搜索 -->
+    <string name="files_search_hint">搜索文件名…</string>
+    <string name="files_empty_search">没有匹配的文件，换个关键词试试</string>
 </resources>
