@@ -100,9 +100,15 @@ class TransferWidgetProvider : AppWidgetProvider() {
         private const val DEFAULT_WIDTH_DP = 250
         private const val DEFAULT_HEIGHT_DP = 110
 
-        /** 小于这个尺寸就进紧凑模式：藏起标题与城市，把空间留给温度和状态 */
+        /**
+         * 小于这个尺寸就进紧凑模式：藏起标题与城市，把空间留给温度和状态。
+         *
+         * 高度只用来兜「4×1 这种特别扁」的卡：桌面给 4×2 的最小高度大约就是 100dp，
+         * 阈值放在 96 会把正常的 4×2 也判成紧凑，标题和城市就都不见了，
+         * 所以这里压到 88，正常 4×2 一律走完整排版，2×2 靠宽度那一条进紧凑。
+         */
         private const val COMPACT_WIDTH_DP = 210
-        private const val COMPACT_HEIGHT_DP = 96
+        private const val COMPACT_HEIGHT_DP = 88
 
         /** 两个方向都小于这个值 → 1×1 极简卡（只留温度与天气图标） */
         private const val TINY_MAX_DP = 110
@@ -159,6 +165,20 @@ class TransferWidgetProvider : AppWidgetProvider() {
 
         /** 卡片三档形态：1×1 极简、4×2 标准、4×4 大卡 */
         internal enum class CardSize { TINY, STANDARD, LARGE }
+
+        /**
+         * 按桌面给的尺寸（dp）判定用哪套布局。
+         *
+         * 关键点：**1×1 必须两个方向都小**。
+         * 之前这里用的是 `||`，而桌面给 4×2 的最小高度只有 100dp 左右，
+         * 一条件命中就整张卡退化成极简形态——标题、城市、连接状态、进度条全没了，
+         * 只剩温度和一个天气词，看上去像「卡片坏了」。
+         */
+        internal fun cardSizeOf(widthDp: Int, heightDp: Int): CardSize = when {
+            widthDp < TINY_MAX_DP && heightDp < TINY_MAX_DP -> CardSize.TINY
+            widthDp >= LARGE_MIN_WIDTH_DP && heightDp >= LARGE_MIN_HEIGHT_DP -> CardSize.LARGE
+            else -> CardSize.STANDARD
+        }
 
         internal data class Model(
             val compact: Boolean,
@@ -220,11 +240,7 @@ class TransferWidgetProvider : AppWidgetProvider() {
             val widthPx = (widthDp * density).toInt().coerceAtLeast(200)
             val heightPx = (heightDp * density).toInt().coerceAtLeast(120)
             val compact = widthDp < COMPACT_WIDTH_DP || heightDp < COMPACT_HEIGHT_DP
-            val size = when {
-                widthDp < TINY_MAX_DP || heightDp < TINY_MAX_DP -> CardSize.TINY
-                widthDp >= LARGE_MIN_WIDTH_DP && heightDp >= LARGE_MIN_HEIGHT_DP -> CardSize.LARGE
-                else -> CardSize.STANDARD
-            }
+            val size = cardSizeOf(widthDp, heightDp)
 
             // 系统深色时按夜间调色板画，哪怕当地是白天
             val systemNight = isSystemNight(context)
@@ -506,11 +522,26 @@ class TransferWidgetProvider : AppWidgetProvider() {
                     dotColor = model.mainColor
                 )
                 if (chart != null) {
-                    views.setViewVisibility(R.id.widgetChart, View.VISIBLE)
                     views.setImageViewBitmap(R.id.widgetChart, chart)
                 } else {
-                    views.setViewVisibility(R.id.widgetChart, View.GONE)
+                    // 没数据也占住这块位置：隐藏会在大卡下半截留一片空白，像渲染坏了
+                    views.setImageViewBitmap(
+                        R.id.widgetChart,
+                        HourlyChartRenderer.renderPlaceholder(
+                            chartW,
+                            chartH,
+                            context.getString(
+                                if (WeatherRepository.cached(context).permissionMissing) {
+                                    R.string.widget_chart_need_permission
+                                } else {
+                                    R.string.widget_chart_loading
+                                }
+                            ),
+                            model.weakColor
+                        )
+                    )
                 }
+                views.setViewVisibility(R.id.widgetChart, View.VISIBLE)
             }
 
             views.setTextViewText(R.id.widgetStatus, model.statusText)

@@ -140,6 +140,46 @@ object HourlyChartRenderer {
         return bitmap
     }
 
+    /**
+     * 没有逐小时数据时画一块「占位图」，而不是把图表整块隐藏。
+     *
+     * 隐藏会让 4×4 卡片下半截留一大片空白，看起来像渲染失败；
+     * 画一条虚线 + 一句提示，位置不变、观感完整，也顺便告诉用户为什么没数据。
+     */
+    fun renderPlaceholder(
+        widthPx: Int,
+        heightPx: Int,
+        text: String,
+        textColor: Int
+    ): Bitmap {
+        val w = widthPx.coerceAtLeast(80)
+        val h = heightPx.coerceAtLeast(40)
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+
+        val density = w / 320f
+        val textSize = (10f * density).coerceIn(18f, 34f)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = textColor
+            this.textSize = textSize
+            textAlign = Paint.Align.CENTER
+        }
+
+        val midY = h / 2f
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = textSize * 0.09f
+        paint.pathEffect = android.graphics.DashPathEffect(
+            floatArrayOf(textSize * 0.5f, textSize * 0.45f), 0f
+        )
+        val dashY = midY + textSize * 0.9f
+        canvas.drawLine(textSize, dashY, w - textSize, dashY, paint)
+
+        paint.style = Paint.Style.FILL
+        paint.pathEffect = null
+        canvas.drawText(text, w / 2f, midY, paint)
+        return bitmap
+    }
+
     /** 卡片上留给图表的可用高度（dp）换算成像素，供 Provider 调用 */
     fun chartHeightPx(cardHeightDp: Int, density: Float): Int =
         (min(cardHeightDp * 0.42f, 96f) * density).toInt().coerceAtLeast(64)

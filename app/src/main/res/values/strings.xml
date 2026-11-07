@@ -224,6 +224,8 @@
     <string name="widget_weather_need_permission_short">需开启定位</string>
     <string name="widget_weather_here">当前位置</string>
     <string name="widget_weather_city_time">%1$s · %2$s</string>
+    <string name="widget_chart_loading">逐小时天气加载中…</string>
+    <string name="widget_chart_need_permission">开启定位后显示逐小时天气</string>
 
     <!-- 天气定位权限说明 -->
     <string name="weather_loc_title">用定位在桌面显示天气</string>

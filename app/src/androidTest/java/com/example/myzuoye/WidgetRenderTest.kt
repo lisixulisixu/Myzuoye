@@ -89,6 +89,48 @@ class WidgetRenderTest {
         }
     }
 
+    /**
+     * 三档形态按**桌面真实下发的尺寸**渲染。
+     *
+     * 之前的用例用的是 250×110（标准卡）和 165×92（紧凑卡），
+     * 都是自己估的尺寸，结果真机上 4×2 报的是 300×100，落进 1×1 分支，
+     * 整张卡只剩温度——测试全绿，桌面上一眼就看出来不对。
+     * 这里改成 Pixel 桌面（411dp 宽、4 列）的实际值。
+     */
+    @Test
+    fun renderRealLauncherSizes() {
+        val context: Context = ApplicationProvider.getApplicationContext()
+        val density = context.resources.displayMetrics.density
+
+        val oneByOne = render(context, 90, 90)
+        val twoByTwo = render(context, 180, 180)
+        val fourByTwo = render(context, 300, 100)
+        val fourByFour = render(context, 300, 300)
+
+        val gap = (12 * density).toInt()
+        val colW = maxOf(oneByOne.width, twoByTwo.width) + gap
+        val sheetW = colW + fourByTwo.width + gap * 3
+        val sheetH = fourByFour.height + twoByTwo.height + gap * 4
+        val sheet = Bitmap.createBitmap(sheetW, sheetH, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(sheet)
+        canvas.drawColor(0xFF202430.toInt())
+
+        canvas.drawBitmap(oneByOne, gap.toFloat(), gap.toFloat(), null)
+        canvas.drawBitmap(twoByTwo, gap.toFloat(), (gap * 2 + oneByOne.height).toFloat(), null)
+        canvas.drawBitmap(fourByTwo, (gap * 2 + colW).toFloat(), gap.toFloat(), null)
+        canvas.drawBitmap(
+            fourByFour,
+            (gap * 2 + colW).toFloat(),
+            (gap * 2 + fourByTwo.height).toFloat(),
+            null
+        )
+
+        val dir = File(context.filesDir, "widget_preview").apply { mkdirs() }
+        File(dir, "widget_sheet_real.png").outputStream().use {
+            sheet.compress(Bitmap.CompressFormat.PNG, 100, it)
+        }
+    }
+
     private fun render(
         context: Context,
         widthDp: Int,
