@@ -1,6 +1,9 @@
 package com.example.myzuoye
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -38,6 +41,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.example.myzuoye.net.LanAddress
 import com.example.myzuoye.p2p.P2pController
 import com.example.myzuoye.transfer.PartialStore
+import com.example.myzuoye.transfer.SendHistory
 import com.example.myzuoye.transfer.SendItem
 import com.example.myzuoye.transfer.SendQueue
 import com.example.myzuoye.transfer.TransferManager
@@ -128,6 +132,14 @@ class MainActivity : AppCompatActivity() {
 
     /** 发送队列：多选的文件排队一个个发 */
     private lateinit var sendQueue: SendQueue
+
+    /**
+     * 长按「取消」暂停下来的那个文件。
+     *
+     * 暂停 = 停掉当前这次的传输，但记住发的是哪个文件；点「继续发送」
+     * 把它重新入队，大文件会靠对端留下的半成品接着传，不用从头再来。
+     */
+    private var pausedSend: SendItem? = null
 
     /** 用户主动点了取消：用来把「发送失败」的文案换成「已取消」，别让人以为出了故障 */
     private var userCancelled = false
@@ -256,6 +268,8 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         permissionAsked = savedInstanceState?.getBoolean(KEY_PERMISSION_ASKED) ?: false
+        // 配对码校验是持久开关：重启后要重新交给传输层，否则会静默失效
+        restorePairCode()
         // 读取「传输时不玩小游戏」偏好
         gamePromptDisabled = prefs().getBoolean(KEY_GAME_PROMPT_DISABLED, false)
 
@@ -305,6 +319,8 @@ class MainActivity : AppCompatActivity() {
 
         // 从相册/文件管理器「分享」进来的文件
         handleShareIntent(intent)
+        // 长按图标进来的快捷入口
+        handleShortcutIntent(intent)
 
         // 轻量入场动画：区块依次淡入，不影响任何交互
         playEntranceAnimation()
@@ -326,14 +342,35 @@ class MainActivity : AppCompatActivity() {
             overridePendingTransition(R.anim.activity_in_bottom, android.R.anim.fade_out)
         }
         btnCancelTransfer.setOnClickListener {
+            // 「暂停」之后按钮变成「继续发送」：点它把刚才那个文件重新入队，
+            // 大文件会走续传握手，从对端已有的字节数接着发
+            val paused = pausedSend
+            if (paused != null && !TransferManager.isSending) {
+                pausedSend = null
+                updateCancelButton()
+                enqueueFiles(listOf(paused.uri))
+                return@setOnClickListener
+            }
+
             // 先把队列清掉，否则取消完当前这个，队列会立刻接着发下一个
             val hadQueue = sendQueue.pendingCount > 0
             sendQueue.clear()
             userCancelled = TransferManager.isSending
-            val cancelled = TransferManager.cancelSend()
+            // cancelActive 同时覆盖「正在发」和「正在收」：收到一半想放弃也能停
+            val cancelled = TransferManager.cancelActive()
             toast(getString(if (cancelled) R.string.transfer_cancelled else R.string.queue_cleared))
             if (!cancelled && hadQueue) log("已清空发送队列")
             updateCancelButton()
+        }
+        // 长按「取消」= 暂停：记住当前这个文件，稍后可以接着发
+        btnCancelTransfer.setOnLongClickListener {
+            if (!TransferManager.isSending || pendingUri == null) return@setOnLongClickListener false
+            pausedSend = SendItem(pendingUri!!, pendingName, pendingSize)
+            sendQueue.clear()
+            TransferManager.cancelSend()
+            toast(getString(R.string.send_paused, pendingName))
+            updateCancelButton()
+            true
         }
         btnPlayGame.setOnClickListener { openGameForFun() }
         findViewById<View>(R.id.btnTools).setOnClickListener { showToolsMenu() }
@@ -363,12 +400,18 @@ class MainActivity : AppCompatActivity() {
 
         // 通道回调只在界面可见时挂载，避免 Activity 泄漏
         TransferManager.onStateChanged = { state, message -> renderChannelState(state, message) }
-        TransferManager.onMessage = { line -> appendChat(line) }
+        TransferManager.onMessage = { line ->
+            appendChat(line)
+            maybeAutoCopy(line)
+        }
+        // 对端开了配对码校验、我们的码不对：弹框要码
+        TransferManager.onPairRejected = { reason -> showPairCodePrompt(reason) }
         TransferManager.onReceiveProgress = { progress, speed ->
             renderReceiveProgress(progress, speed)
-            // 小组件：接收中显示文件名（同一文件的高频进度回调会被去重，不会反复刷）
+            // 小组件：接收中显示文件名、速度和剩余时间（同一文件的高频回调会被去重）
             WidgetState.setTransferring(
-                this, true, TransferManager.receivingFileName, (progress * 100).toInt()
+                this, true, TransferManager.receivingFileName, (progress * 100).toInt(),
+                speed, etaSeconds(speed, TransferManager.receivingTotalBytes, progress)
             )
         }
         TransferManager.onReceiveDone = { path ->
@@ -379,7 +422,10 @@ class MainActivity : AppCompatActivity() {
         TransferManager.onSendProgress = { progress, speed ->
             renderSendProgress(progress, speed)
             transferGame?.onProgress(pendingName, progress)
-            WidgetState.setTransferring(this, true, pendingName, (progress * 100).toInt())
+            WidgetState.setTransferring(
+                this, true, pendingName, (progress * 100).toInt(),
+                speed, etaSeconds(speed, TransferManager.sendingTotalBytes, progress)
+            )
         }
         TransferManager.onSendDone = { ok ->
             renderSendDone(ok)
@@ -427,6 +473,7 @@ class MainActivity : AppCompatActivity() {
         TransferManager.onStateChanged = null
         TransferManager.onMessage = null
         TransferManager.clearFileCallbacks()
+        TransferManager.onPairRejected = null
         // 界面不可见时关闭游戏窗口，避免 Dialog 引用已销毁的 Activity
         transferGame?.dismiss()
         transferGame = null
@@ -587,8 +634,18 @@ class MainActivity : AppCompatActivity() {
 
     /** 封面右上角「⋮」：把只有长按才知道的功能集中到一处，顺便补一份手势说明 */
     private fun showToolsMenu() {
+        val pairLabel = prefs().getString(KEY_PAIR_CODE, null).orEmpty().let {
+            if (it.isEmpty()) getString(R.string.pair_code_off)
+            else getString(R.string.pair_code_on, it)
+        }
         val items = arrayOf(
             getString(R.string.lan_direct),
+            getString(R.string.send_history),
+            getString(
+                R.string.auto_copy_toggle,
+                getString(if (autoCopyEnabled()) R.string.switch_on else R.string.switch_off)
+            ),
+            getString(R.string.pair_code, pairLabel),
             getString(R.string.log_export),
             getString(R.string.tools_gestures),
             getString(R.string.log_clear)
@@ -598,8 +655,17 @@ class MainActivity : AppCompatActivity() {
             .setItems(items) { _, which ->
                 when (which) {
                     0 -> showLanDirectDialog()
-                    1 -> exportLog()
-                    2 -> showGesturesDialog()
+                    1 -> showSendHistory()
+                    2 -> {
+                        val enabled = !autoCopyEnabled()
+                        setAutoCopyEnabled(enabled)
+                        showHint(
+                            getString(if (enabled) R.string.auto_copy_on else R.string.auto_copy_off)
+                        )
+                    }
+                    3 -> togglePairCode()
+                    4 -> exportLog()
+                    5 -> showGesturesDialog()
                     else -> {
                         TransferManager.clearHistory()
                         renderChat()
@@ -608,6 +674,148 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             .show()
+    }
+
+    // ------------------------------------------------------------------ 配对码
+
+    /** 开 / 关配对码校验；开的时候顺手生成一个新码 */
+    private fun togglePairCode() {
+        val current = prefs().getString(KEY_PAIR_CODE, null).orEmpty()
+        if (current.isEmpty()) {
+            applyPairCode(newPairCode())
+        } else {
+            prefs().edit().remove(KEY_PAIR_CODE).apply()
+            TransferManager.setPairCode(null)
+            showHint(getString(R.string.pair_code_off_hint))
+        }
+    }
+
+    private fun newPairCode(): String = (1000..9999).random().toString()
+
+    /** 写进偏好并同步给传输层，同时把码亮给用户看（面板关了就看不见了） */
+    private fun applyPairCode(code: String) {
+        prefs().edit().putString(KEY_PAIR_CODE, code).apply()
+        TransferManager.setPairCode(code)
+        log("配对码校验已开启：$code")
+
+        AppDialog.builder(this)
+            .setTitle(getString(R.string.pair_code_dialog_title, code))
+            .setMessage(R.string.pair_code_dialog_body)
+            .setPositiveButton(R.string.dialog_ok, null)
+            .setNeutralButton(R.string.pair_code_reroll) { _, _ -> applyPairCode(newPairCode()) }
+            .show()
+    }
+
+    /** 应用启动时把上次的码重新交给传输层，否则重启后校验会悄悄失效 */
+    private fun restorePairCode() {
+        val saved = prefs().getString(KEY_PAIR_CODE, null).orEmpty()
+        TransferManager.setPairCode(saved.ifEmpty { null })
+    }
+
+    /**
+     * 对端拒了我们（配对码不对）：弹框让用户填码再连一次。
+     *
+     * 不用 Toast 而用输入框：这是唯一能继续往下走的动作，
+     * 用户看到提示却没法输入的话，只能重新点一遍设备。
+     */
+    private fun showPairCodePrompt(reason: String) {
+        if (isFinishing) return
+        val density = resources.displayMetrics.density
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val pad = (20 * density).toInt()
+            setPadding(pad, pad / 2, pad, 0)
+        }
+        val input = EditText(this).apply {
+            hint = getString(R.string.pair_code_input_hint)
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            filters = arrayOf(android.text.InputFilter.LengthFilter(4))
+            setSingleLine(true)
+        }
+        container.addView(input)
+
+        val body = getString(
+            R.string.pair_code_prompt_body,
+            reason.ifBlank { getString(R.string.pair_code_prompt_fallback) }
+        )
+
+        AppDialog.builder(this)
+            .setTitle(R.string.pair_code_prompt_title)
+            .setMessage(body)
+            .setView(container)
+            .setPositiveButton(R.string.pair_code_connect) { _, _ ->
+                val code = input.text.toString().trim()
+                if (code.length != 4) {
+                    toast(getString(R.string.pair_code_invalid))
+                    return@setPositiveButton
+                }
+                if (!TransferManager.retryWithPairCode(code)) {
+                    toast(getString(R.string.channel_not_ready))
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** 最近发送过的文件：点一下直接重新入队 */
+    private fun showSendHistory() {
+        val entries = SendHistory.recent(this)
+        if (entries.isEmpty()) {
+            toast(getString(R.string.send_history_empty))
+            return
+        }
+        val labels = entries.map { entry ->
+            val size = if (entry.size > 0) Formatters.size(entry.size) else ""
+            if (size.isEmpty()) entry.name else "${entry.name} · $size"
+        }.toTypedArray()
+
+        AppDialog.builder(this)
+            .setTitle(R.string.send_history)
+            .setItems(labels) { _, which ->
+                val entry = entries.getOrNull(which) ?: return@setItems
+                if (!TransferManager.isConnected) {
+                    toast(getString(R.string.channel_not_ready))
+                    return@setItems
+                }
+                val uri = Uri.parse(entry.uri)
+                // 持久授权可能已经失效（用户清理了权限、或来源不支持），这里先探一下
+                val readable = runCatching {
+                    contentResolver.openInputStream(uri)?.use { true } ?: false
+                }.getOrDefault(false)
+                if (!readable) {
+                    toast(getString(R.string.send_history_expired))
+                    return@setItems
+                }
+                enqueueFiles(listOf(uri))
+            }
+            .show()
+    }
+
+    /**
+     * 收到文本后按开关决定是否进剪贴板。
+     *
+     * 只处理对端发来的行（带 [TransferManager.PEER_PREFIX]），
+     * 自己发的、系统提示（已连接 / 已收到文件）一律跳过，
+     * 否则剪贴板里会莫名其妙多出「通道已建立」这种话。
+     */
+    private fun maybeAutoCopy(line: String) {
+        if (!autoCopyEnabled()) return
+        if (!line.startsWith(TransferManager.PEER_PREFIX)) return
+        val text = line.removePrefix(TransferManager.PEER_PREFIX).trim()
+        if (text.isEmpty()) return
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+        runCatching {
+            cm.setPrimaryClip(ClipData.newPlainText(getString(R.string.app_name), text))
+        }.onSuccess {
+            showHint(getString(R.string.auto_copy_on), HintKind.INFO)
+        }
+    }
+
+    /** 收到的文本是否自动复制到剪贴板 */
+    private fun autoCopyEnabled(): Boolean = prefs().getBoolean(KEY_AUTO_COPY, false)
+
+    private fun setAutoCopyEnabled(enabled: Boolean) {
+        prefs().edit().putBoolean(KEY_AUTO_COPY, enabled).apply()
     }
 
     private fun showGesturesDialog() {
@@ -1217,6 +1425,8 @@ class MainActivity : AppCompatActivity() {
         }
         val items = uris.map { uri ->
             val (name, size) = queryFileInfo(uri)
+            // 记一笔发送历史，之后可以在「更多 → 最近发送」里一键重发
+            SendHistory.record(this, uri, name, size)
             SendItem(uri, name, size)
         }
         val queued = sendQueue.enqueue(items)
@@ -1265,6 +1475,25 @@ class MainActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleShareIntent(intent)
+        handleShortcutIntent(intent)
+    }
+
+    /**
+     * 长按图标（或从别处带 action 拉起）时的快捷动作。
+     *
+     * 都延迟一点再执行：刚进 onCreate 时权限对话框、入场动画、P2P 初始化还在排队，
+     * 立刻去搜设备会被还没准备好的状态挡回去。
+     */
+    private fun handleShortcutIntent(intent: Intent?) {
+        when (intent?.action) {
+            ACTION_SHORTCUT_DISCOVER -> uiHandler.postDelayed({
+                if (!isFinishing) startDiscovery(force = true)
+            }, 700L)
+
+            ACTION_SHORTCUT_HISTORY -> uiHandler.postDelayed({
+                if (!isFinishing) showSendHistory()
+            }, 500L)
+        }
     }
 
     /** 读 SAF 的文件名与大小；拿不到时给一个能跑通的默认值 */
@@ -1372,6 +1601,8 @@ class MainActivity : AppCompatActivity() {
         } else {
             getString(R.string.transfer_receiving_speed, name, percent, suffix)
         }
+        // 接收中也要有「取消」，不然收到不想收的大文件只能等对方发完
+        updateCancelButton()
     }
 
     private fun renderReceiveDone(path: String?) {
@@ -1388,6 +1619,7 @@ class MainActivity : AppCompatActivity() {
             flowBackground.setAccent(COLOR_ACCENT_ERROR, 0.22f)
             showHint(getString(R.string.transfer_received_fail), HintKind.ERROR)
         }
+        updateCancelButton()
     }
 
     private fun renderSendProgress(progress: Float, speed: Long) {
@@ -1424,6 +1656,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 估算剩余秒数，供桌面小组件显示。
+     *
+     * 速度还没采到样本、或总量未知（SAF 不给 SIZE）时返回 0，
+     * 卡片那边就不会硬凑出一个「剩 -- 秒」。
+     */
+    private fun etaSeconds(speed: Long, totalBytes: Long, progress: Float): Long {
+        if (speed <= 0L || totalBytes <= 0L) return 0L
+        val remaining = (totalBytes * (1f - progress.coerceIn(0f, 1f))).toLong()
+        return if (remaining > 0L) remaining / speed else 0L
+    }
+
     private fun renderSendDone(ok: Boolean) {
         pbTransfer.progress = 0
         when {
@@ -1454,10 +1698,22 @@ class MainActivity : AppCompatActivity() {
         updateCancelButton()
     }
 
-    /** 「取消」只在真的有事可取消时出现，平时不占地方 */
+    /** 「取消」只在真的有事可取消时出现；暂停之后变成「继续发送」 */
     private fun updateCancelButton() {
-        val active = TransferManager.isSending || sendQueue.pendingCount > 0
+        val paused = pausedSend
+        if (paused != null && !TransferManager.isSending) {
+            btnCancelTransfer.visibility = View.VISIBLE
+            btnCancelTransfer.setText(R.string.send_resume)
+            // 没连上就继续不了，置灰比点了没反应更清楚
+            btnCancelTransfer.isEnabled = TransferManager.isConnected
+            return
+        }
+        val active = TransferManager.isSending ||
+            TransferManager.isReceiving ||
+            sendQueue.pendingCount > 0
         btnCancelTransfer.visibility = if (active) View.VISIBLE else View.GONE
+        btnCancelTransfer.setText(R.string.transfer_cancel)
+        btnCancelTransfer.isEnabled = true
     }
 
     // ------------------------------------------------------------------ 工具
@@ -1547,6 +1803,16 @@ class MainActivity : AppCompatActivity() {
 
         /** 诊断日志是否收起 */
         const val KEY_LOG_COLLAPSED = "log_collapsed"
+
+        /** 收到对方文本时是否自动复制到剪贴板 */
+        const val KEY_AUTO_COPY = "auto_copy_text"
+
+        /** 桌面图标长按快捷方式的 action，与 res/xml/shortcuts.xml 保持一致 */
+        const val ACTION_SHORTCUT_DISCOVER = "com.example.myzuoye.action.SHORTCUT_DISCOVER"
+        const val ACTION_SHORTCUT_HISTORY = "com.example.myzuoye.action.SHORTCUT_HISTORY"
+
+        /** 本机作为组主时的 4 位配对码；不存在表示不校验 */
+        const val KEY_PAIR_CODE = "pair_code"
 
         // 背景状态色：冷蓝待连接 / 青绿已连接 / 紫传输中 / 红失败
         const val COLOR_ACCENT_IDLE = 0xFF3B82F6.toInt()

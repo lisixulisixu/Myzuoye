@@ -51,6 +51,14 @@ object WeatherRepository {
     private const val KEY_TEMP_MAX = "temp_max"
     private const val KEY_TEMP_MIN = "temp_min"
     private const val KEY_PRECIP = "precip"
+    private const val KEY_HOURLY = "hourly_temps"
+    private const val KEY_HOURLY_START = "hourly_start_hour"
+    private const val KEY_SUNRISE = "sunrise"
+    private const val KEY_SUNSET = "sunset"
+    private const val KEY_UV = "uv_index"
+
+    /** 逐小时曲线要画多少个点：12 个足够看出趋势，再多字就挤成一团 */
+    private const val HOURLY_COUNT = 12
 
     /** 「没取到温度」的哨兵值（SharedPreferences 没有 putNull） */
     private const val TEMP_UNKNOWN = Int.MIN_VALUE
@@ -77,7 +85,21 @@ object WeatherRepository {
         val tempMaxC: Int? = null,
         val tempMinC: Int? = null,
         /** 今日最大降水概率（0..100） */
-        val precipProb: Int? = null
+        val precipProb: Int? = null,
+        /**
+         * 未来 12 小时逐小时温度（摄氏），从 [hourlyStart] 那小时开始。
+         *
+         * 放在快照里而不是单独接口，是因为小组件的逐小时曲线要和当前温湿度同源，
+         * 否则会出现「现在 12°C，曲线第一个点却是 9°C」这种自相矛盾。
+         */
+        val hourlyTemps: List<Int> = emptyList(),
+        /** 逐小时数据的起始小时（0..23），用于标注刻度 */
+        val hourlyStartHour: Int = 0,
+        /** 日出 / 日落，形如 "06:12"；接口没给时为空串 */
+        val sunrise: String = "",
+        val sunset: String = "",
+        /** 今日紫外线指数（越大越晒） */
+        val uvIndex: Int? = null
     ) {
         val hasData: Boolean get() = tempC != null
 
@@ -117,7 +139,14 @@ object WeatherRepository {
             apparentC = p.getInt(KEY_APPARENT, TEMP_UNKNOWN).let { if (it == TEMP_UNKNOWN) null else it },
             tempMaxC = p.getInt(KEY_TEMP_MAX, TEMP_UNKNOWN).let { if (it == TEMP_UNKNOWN) null else it },
             tempMinC = p.getInt(KEY_TEMP_MIN, TEMP_UNKNOWN).let { if (it == TEMP_UNKNOWN) null else it },
-            precipProb = p.getInt(KEY_PRECIP, TEMP_UNKNOWN).let { if (it == TEMP_UNKNOWN) null else it }
+            precipProb = p.getInt(KEY_PRECIP, TEMP_UNKNOWN).let { if (it == TEMP_UNKNOWN) null else it },
+            hourlyTemps = p.getString(KEY_HOURLY, "").orEmpty()
+                .split(',')
+                .mapNotNull { it.trim().toIntOrNull() },
+            hourlyStartHour = p.getInt(KEY_HOURLY_START, 0),
+            sunrise = p.getString(KEY_SUNRISE, "").orEmpty(),
+            sunset = p.getString(KEY_SUNSET, "").orEmpty(),
+            uvIndex = p.getInt(KEY_UV, TEMP_UNKNOWN).let { if (it == TEMP_UNKNOWN) null else it }
         )
     }
 
@@ -134,6 +163,11 @@ object WeatherRepository {
             .putInt(KEY_TEMP_MAX, snapshot.tempMaxC ?: TEMP_UNKNOWN)
             .putInt(KEY_TEMP_MIN, snapshot.tempMinC ?: TEMP_UNKNOWN)
             .putInt(KEY_PRECIP, snapshot.precipProb ?: TEMP_UNKNOWN)
+            .putString(KEY_HOURLY, snapshot.hourlyTemps.joinToString(","))
+            .putInt(KEY_HOURLY_START, snapshot.hourlyStartHour)
+            .putString(KEY_SUNRISE, snapshot.sunrise)
+            .putString(KEY_SUNSET, snapshot.sunset)
+            .putInt(KEY_UV, snapshot.uvIndex ?: TEMP_UNKNOWN)
             .apply()
     }
 
@@ -252,7 +286,12 @@ object WeatherRepository {
                 apparentC = result.apparentC,
                 tempMaxC = result.tempMaxC,
                 tempMinC = result.tempMinC,
-                precipProb = result.precipProb
+                precipProb = result.precipProb,
+                hourlyTemps = result.hourlyTemps,
+                hourlyStartHour = result.hourlyStartHour,
+                sunrise = result.sunrise,
+                sunset = result.sunset,
+                uvIndex = result.uvIndex
             )
         )
     }
@@ -317,24 +356,32 @@ object WeatherRepository {
         val apparentC: Int?,
         val tempMaxC: Int?,
         val tempMinC: Int?,
-        val precipProb: Int?
+        val precipProb: Int?,
+        val hourlyTemps: List<Int> = emptyList(),
+        val hourlyStartHour: Int = 0,
+        val sunrise: String = "",
+        val sunset: String = "",
+        val uvIndex: Int? = null
     )
 
     private fun requestWeather(lat: Double, lon: Double): WeatherResult? {
-        // 一次请求同时拿到实况与今日概况：多要三个字段不会增加额外请求，
-        // 但小组件上就能多显示「体感 / 高低温 / 降水概率」
+        // 一次请求把实况、今日概况、往后 12 小时的温度、日出日落一起拿回来。
+        // 都是同一个接口的不同字段，多要几个不会多一次网络往返。
         val url = "https://api.open-meteo.com/v1/forecast" +
             "?latitude=%.4f&longitude=%.4f".format(lat, lon) +
             "&current=temperature_2m,apparent_temperature,weather_code,is_day" +
-            "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
-            "&timezone=auto&forecast_days=1"
+            "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max," +
+            "sunrise,sunset,uv_index_max" +
+            "&hourly=temperature_2m" +
+            // 2 天是为了让「夜里 23 点」也能凑满往后 12 小时，跨零点不用再请求一次
+            "&timezone=auto&forecast_days=2"
         val body = httpGet(url) ?: return null
         val json = runCatching { JSONObject(body) }.getOrNull() ?: return null
         val current = json.optJSONObject("current") ?: return null
         val temp = current.optDouble("temperature_2m", Double.NaN)
         if (temp.isNaN()) return null
 
-        // daily 是数组，只有一天，取下标 0
+        // daily 是数组，取下标 0（今天）
         val daily = json.optJSONObject("daily")
         fun firstOf(name: String): Double? {
             val arr = daily?.optJSONArray(name) ?: return null
@@ -342,6 +389,38 @@ object WeatherRepository {
             val v = arr.optDouble(0, Double.NaN)
             return if (v.isNaN()) null else v
         }
+        fun firstStringOf(name: String): String {
+            val arr = daily?.optJSONArray(name) ?: return ""
+            if (arr.length() == 0) return ""
+            // "2026-11-07T06:12" → "06:12"
+            return arr.optString(0).substringAfter('T').take(5)
+        }
+
+        // 逐小时：从「当前这个整点」开始取 12 个，ISO 字符串直接比较即可（格式统一）
+        val hourly = json.optJSONObject("hourly")
+        val hours = hourly?.optJSONArray("time")
+        val temps = hourly?.optJSONArray("temperature_2m")
+        val nowIso = current.optString("time")
+        var start = 0
+        if (hours != null && nowIso.isNotEmpty()) {
+            for (i in 0 until hours.length()) {
+                if (hours.optString(i) >= nowIso) {
+                    start = i
+                    break
+                }
+            }
+        }
+        val hourlyTemps = mutableListOf<Int>()
+        if (hours != null && temps != null) {
+            val end = minOf(start + HOURLY_COUNT, temps.length(), hours.length())
+            for (i in start until end) {
+                val v = temps.optDouble(i, Double.NaN)
+                // 遇到空洞就停：宁可少画一段，也不要让曲线和小时间隔错位
+                if (v.isNaN()) break
+                hourlyTemps += Math.round(v).toInt()
+            }
+        }
+        val startHour = hours?.optString(start)?.substringAfter('T')?.take(2)?.toIntOrNull() ?: 0
 
         return WeatherResult(
             tempC = Math.round(temp).toInt(),
@@ -353,7 +432,12 @@ object WeatherRepository {
             tempMinC = firstOf("temperature_2m_min")?.let { Math.round(it).toInt() },
             precipProb = firstOf("precipitation_probability_max")?.let {
                 Math.round(it).toInt().coerceIn(0, 100)
-            }
+            },
+            hourlyTemps = hourlyTemps,
+            hourlyStartHour = startHour,
+            sunrise = firstStringOf("sunrise"),
+            sunset = firstStringOf("sunset"),
+            uvIndex = firstOf("uv_index_max")?.let { Math.round(it).toInt().coerceIn(0, 15) }
         )
     }
 

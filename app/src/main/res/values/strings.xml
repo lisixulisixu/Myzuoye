@@ -53,6 +53,8 @@
     <string name="send_queue_all_done">全部发送完成，共 %1$d 个文件</string>
     <string name="send_queue_partial">发送结束：成功 %1$d 个，失败 %2$d 个</string>
     <string name="transfer_cancel">取消</string>
+    <string name="send_resume">继续发送</string>
+    <string name="send_paused">已暂停：%1$s（点「继续发送」接着传）</string>
     <string name="transfer_cancelled">已取消传输</string>
     <string name="queue_cleared">已清空发送队列</string>
     <string name="share_waiting_connect">已收到 %1$d 个文件，连接设备后会自动发送</string>
@@ -68,6 +70,7 @@
     <!-- M4：前台服务通知 -->
     <string name="notif_channel_name">文件传输</string>
     <string name="notif_transferring">正在传输文件</string>
+    <string name="notif_cancel">取消</string>
     <string name="notif_idle">连接空闲</string>
 
     <!-- 文本通道调试入口（长按通道状态触发） -->
@@ -98,6 +101,40 @@
     <string name="tools_gestures">手势与快捷操作说明</string>
     <string name="tools_gestures_body">· 点封面右下角的女仆：她会说话，也会换表情\n· 长按「文本通道」：局域网直连、导出日志\n· 长按「玩游戏」：恢复「传输前询问是否玩」\n· 长按底部日志：导出或清空日志\n· 传输中可点「取消」清空发送队列</string>
     <string name="devices_empty_hint">还没有发现设备\n让另一台手机也打开本应用并点「搜索设备」\n连不上时可长按「文本通道」改用局域网直连</string>
+
+    <!-- 发送历史与自动复制 -->
+    <string name="send_history">最近发送</string>
+    <string name="send_history_empty">还没有发送记录，发过文件后会出现在这里</string>
+    <string name="send_history_expired">这个文件已经不能读了，请重新选择</string>
+    <string name="send_history_hint">点一下直接重发</string>
+    <string name="auto_copy_toggle">收到文本自动复制：%1$s</string>
+    <string name="auto_copy_on">已开启：收到的文本会自动进剪贴板</string>
+    <string name="auto_copy_off">已关闭：收到的文本不再自动复制</string>
+    <string name="switch_on">开</string>
+    <string name="switch_off">关</string>
+
+    <!-- 配对码校验 -->
+    <string name="pair_code">配对码校验：%1$s</string>
+    <string name="pair_code_on">已开启（%1$s）</string>
+    <string name="pair_code_off">未开启</string>
+    <string name="pair_code_dialog_title">本机配对码 %1$s</string>
+    <string name="pair_code_dialog_body">开启后，别的设备连过来必须先输对这个 4 位数字，否则一律拒绝。\n\n· 对端第一次会被打回，然后弹出输入框让它填码\n· 关闭校验后，同一 Wi-Fi 下任何连上 8988 端口的设备都能和你互传\n· 这个码只防误连和随手连，防不住同网段抓包</string>
+    <string name="pair_code_reroll">换一个</string>
+    <string name="pair_code_off_hint">已关闭配对码校验</string>
+    <string name="pair_code_prompt_title">对方要求配对码</string>
+    <string name="pair_code_prompt_body">%1$s\n\n请输入对方手机上显示的 4 位配对码。</string>
+    <string name="pair_code_prompt_fallback">对方开启了配对码校验。</string>
+    <string name="pair_code_input_hint">4 位数字</string>
+    <string name="pair_code_connect">连接</string>
+    <string name="pair_code_invalid">配对码是 4 位数字</string>
+    <string name="pair_code_listening">已监听端口 %1$d，配对码 %2$s，等待对方接入</string>
+
+    <!-- 桌面图标长按快捷方式 -->    <string name="shortcut_discover">搜索设备</string>
+    <string name="shortcut_discover_long">搜索附近的设备</string>
+    <string name="shortcut_files">已收文件</string>
+    <string name="shortcut_files_long">查看已接收的文件</string>
+    <string name="shortcut_history">最近发送</string>
+    <string name="shortcut_history_long">重发最近发过的文件</string>
 
     <!-- 应用内查看已接收文件 -->
     <string name="action_view_files">已收文件</string>
@@ -166,6 +203,17 @@
     <string name="widget_received_zero">已接收 0 个</string>
     <string name="widget_received">已接收 %1$d 个</string>
     <string name="widget_receiving">正在接收：%1$s</string>
+
+    <!-- 小组件 4×4 大卡 -->
+    <string name="widget_sun">日出 %1$s · 日落 %2$s</string>
+    <string name="widget_uv">紫外线 %1$d</string>
+    <string name="widget_feels">体感 %1$d°</string>
+    <string name="widget_btn_refresh">刷新</string>
+    <string name="widget_btn_files">已收</string>
+    <string name="widget_btn_open">打开</string>
+    <string name="widget_btn_refresh_desc">立即刷新天气</string>
+    <string name="widget_btn_files_desc">查看已接收的文件</string>
+    <string name="widget_btn_open_desc">打开 WiFi 快传</string>
 
     <!-- 小组件天气 -->
     <string name="widget_temp">%1$d°</string>

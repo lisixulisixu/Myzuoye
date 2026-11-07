@@ -58,6 +58,37 @@ class WidgetRenderTest {
         }
     }
 
+    /**
+     * 4×4 大卡与 1×1 迷你卡。
+     *
+     * 这两套布局是新加的，最容易犯的错是「布局里有、代码里没设」或者用了
+     * RemoteViews 不支持的控件——编译期完全看不出来，只有 apply 才会抛。
+     */
+    @Test
+    fun renderLargeAndTiny() {
+        val context: Context = ApplicationProvider.getApplicationContext()
+        val density = context.resources.displayMetrics.density
+
+        val large = render(context, 250, 240)
+        val tiny = render(context, 72, 72)
+        assertNotNull(large)
+        assertNotNull(tiny)
+
+        val gap = (12 * density).toInt()
+        val sheetW = large.width + tiny.width + gap * 3
+        val sheetH = maxOf(large.height, tiny.height) + gap * 2
+        val sheet = Bitmap.createBitmap(sheetW, sheetH, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(sheet)
+        canvas.drawColor(0xFF202430.toInt())
+        canvas.drawBitmap(large, gap.toFloat(), gap.toFloat(), null)
+        canvas.drawBitmap(tiny, (gap * 2 + large.width).toFloat(), gap.toFloat(), null)
+
+        val dir = File(context.filesDir, "widget_preview").apply { mkdirs() }
+        File(dir, "widget_sheet_large.png").outputStream().use {
+            sheet.compress(Bitmap.CompressFormat.PNG, 100, it)
+        }
+    }
+
     private fun render(
         context: Context,
         widthDp: Int,

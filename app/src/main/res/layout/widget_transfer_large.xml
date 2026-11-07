@@ -1,0 +1,229 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  4×4 大卡布局。
+
+  和 4×2 的区别：多出来的是「逐小时温度曲线」和「天文信息 + 快捷按钮」。
+  曲线是一张离屏画好的位图（HourlyChartRenderer），RemoteViews 里当普通 ImageView 用；
+  按钮只有三个（刷新 / 已收文件 / 打开），再多就显得像控制面板而不是小组件了。
+
+  RemoteViews 白名单限制：只能用 FrameLayout / LinearLayout / ImageView / TextView / ProgressBar，
+  不能用 Space、不能放自定义 View、也不能做逐帧动画。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widgetRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg">
+
+    <ImageView
+        android:id="@+id/widgetScene"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:importantForAccessibility="no"
+        android:scaleType="fitXY" />
+
+    <!-- 天体：正方形位图 + 正方形控件，避免被卡片比例拉成椭圆 -->
+    <ImageView
+        android:id="@+id/widgetCelestial"
+        android:layout_width="86dp"
+        android:layout_height="86dp"
+        android:layout_gravity="end|top"
+        android:layout_marginTop="10dp"
+        android:layout_marginEnd="12dp"
+        android:importantForAccessibility="no"
+        android:scaleType="fitCenter" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:padding="13dp">
+
+        <!-- 标题行 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageView
+                android:id="@+id/widgetIcon"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:contentDescription="@string/widget_title"
+                android:src="@mipmap/ic_launcher_round_my" />
+
+            <TextView
+                android:id="@+id/widgetTitle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/widget_title"
+                android:textColor="#22303F"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/widgetTemp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:text="@string/widget_temp_unknown"
+                android:textColor="#22303F"
+                android:textSize="26sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- 天气 + 城市 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="1dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/widgetCondition"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/widget_weather_loading"
+                android:textColor="#3C4757"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/widgetCity"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/widget_weather_locating"
+                android:textColor="#4E5A6C"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <!-- 逐小时温度曲线（位图，数据不够时整块 GONE） -->
+        <ImageView
+            android:id="@+id/widgetChart"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="4dp"
+            android:layout_weight="1"
+            android:importantForAccessibility="no"
+            android:scaleType="fitXY" />
+
+        <!-- 日出日落 / 紫外线 / 体感 -->
+        <TextView
+            android:id="@+id/widgetDetail"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="#4E5A6C"
+            android:textSize="11sp" />
+
+        <!-- 传输进度 -->
+        <ProgressBar
+            android:id="@+id/widgetProgress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="4dp"
+            android:layout_marginTop="4dp"
+            android:max="100"
+            android:progress="0"
+            android:progressDrawable="@drawable/bg_progress"
+            android:visibility="gone" />
+
+        <!-- 连接状态 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingTop="3dp">
+
+            <ImageView
+                android:id="@+id/widgetDot"
+                android:layout_width="9dp"
+                android:layout_height="9dp"
+                android:contentDescription="@string/widget_status_label"
+                android:src="@drawable/widget_dot" />
+
+            <TextView
+                android:id="@+id/widgetStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="5dp"
+                android:maxLines="1"
+                android:text="@string/widget_status_disconnected"
+                android:textColor="#4E5A6C"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/widgetReceived"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:gravity="end"
+                android:maxLines="1"
+                android:text="@string/widget_received_zero"
+                android:textColor="#5C6879"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <!-- 快捷按钮：把最常用的三个动作搬到桌面 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/widgetBtnRefresh"
+                android:layout_width="0dp"
+                android:layout_height="30dp"
+                android:layout_weight="1"
+                android:background="@drawable/widget_btn"
+                android:contentDescription="@string/widget_btn_refresh_desc"
+                android:gravity="center"
+                android:text="@string/widget_btn_refresh"
+                android:textColor="#3C4757"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/widgetBtnFiles"
+                android:layout_width="0dp"
+                android:layout_height="30dp"
+                android:layout_marginStart="6dp"
+                android:layout_weight="1"
+                android:background="@drawable/widget_btn"
+                android:contentDescription="@string/widget_btn_files_desc"
+                android:gravity="center"
+                android:text="@string/widget_btn_files"
+                android:textColor="#3C4757"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/widgetBtnOpen"
+                android:layout_width="0dp"
+                android:layout_height="30dp"
+                android:layout_marginStart="6dp"
+                android:layout_weight="1"
+                android:background="@drawable/widget_btn"
+                android:contentDescription="@string/widget_btn_open_desc"
+                android:gravity="center"
+                android:text="@string/widget_btn_open"
+                android:textColor="#3C4757"
+                android:textSize="11sp" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

@@ -48,9 +48,12 @@ object WeatherSceneRenderer {
     private const val MAX_PIXELS = 220_000
 
     /** 只缓存最近几张（不同尺寸 / 昼夜 / 天气），避免反复重绘 */
-    private val cache = object : LruCache<String, Bitmap>(3) {
+    private val cache = object : LruCache<String, Bitmap>(6) {
         override fun sizeOf(key: String, value: Bitmap) = 1
     }
+
+    /** 画面变体数量：太多会撑爆 LRU 缓存，4 帧轮换已经够「不像死图」了 */
+    private const val VARIANT_COUNT = 4
 
     /**
      * 背景层：天空渐变 + 云 + 雨雪雾 + 光效。
@@ -63,13 +66,21 @@ object WeatherSceneRenderer {
         widthPx: Int,
         heightPx: Int,
         condition: WeatherCondition,
-        isDay: Boolean
+        isDay: Boolean,
+        /**
+         * 画面变体：云的形状是随机撒的，换一个变体就是另一朵云。
+         *
+         * RemoteViews 做不了逐帧动画（桌面不会替我们重绘），但每次刷新换一帧，
+         * 用户每次瞥一眼卡片云的位置都不一样，画面就不会像一张死图。
+         */
+        variant: Int = 0
     ): Bitmap {
         val (w, h) = fitSize(widthPx, heightPx)
-        val key = "bg_${condition.name}_$isDay" + "_${w}x$h"
+        val slot = ((variant % VARIANT_COUNT) + VARIANT_COUNT) % VARIANT_COUNT
+        val key = "bg_${condition.name}_$isDay" + "_${w}x$h" + "_v$slot"
         cache.get(key)?.let { return it }
 
-        val bitmap = drawBackground(w, h, condition, isDay)
+        val bitmap = drawBackground(w, h, condition, isDay, slot)
         cache.put(key, bitmap)
         return bitmap
     }
@@ -132,7 +143,8 @@ object WeatherSceneRenderer {
         w: Int,
         h: Int,
         condition: WeatherCondition,
-        isDay: Boolean
+        isDay: Boolean,
+        variant: Int = 0
     ): Bitmap {
         val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
@@ -148,7 +160,8 @@ object WeatherSceneRenderer {
             }
         )
 
-        val random = Random(condition.ordinal * 977 + if (isDay) 13 else 29)
+        // 变体参与随机种子：同一个变体总是画同一朵云（缓存命中），换变体就换一片云
+        val random = Random(condition.ordinal * 977 + (if (isDay) 13 else 29) + variant * 7919)
 
         drawSky(canvas, fw, fh, condition, isDay)
         if (!isDay) drawStars(canvas, fw, fh, random, if (hasCelestial(condition)) 46 else 26)

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  长按桌面图标弹出的快捷入口。
+  这里的 action 用自定义字符串：<intent> 里只能带 <data>，带不了 extra，
+  所以「打开后要做什么」直接编在 action 上，由 MainActivity 自己判断。
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher_round_my"
+        android:shortcutId="discover"
+        android:shortcutLongLabel="@string/shortcut_discover_long"
+        android:shortcutShortLabel="@string/shortcut_discover">
+        <intent
+            android:action="com.example.myzuoye.action.SHORTCUT_DISCOVER"
+            android:targetClass="com.example.myzuoye.MainActivity"
+            android:targetPackage="com.example.myzuoye" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher_round_my"
+        android:shortcutId="files"
+        android:shortcutLongLabel="@string/shortcut_files_long"
+        android:shortcutShortLabel="@string/shortcut_files">
+        <intent
+            android:action="com.example.myzuoye.action.SHORTCUT_FILES"
+            android:targetClass="com.example.myzuoye.ReceivedFilesActivity"
+            android:targetPackage="com.example.myzuoye" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher_round_my"
+        android:shortcutId="history"
+        android:shortcutLongLabel="@string/shortcut_history_long"
+        android:shortcutShortLabel="@string/shortcut_history">
+        <intent
+            android:action="com.example.myzuoye.action.SHORTCUT_HISTORY"
+            android:targetClass="com.example.myzuoye.MainActivity"
+            android:targetPackage="com.example.myzuoye" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+
+</shortcuts>

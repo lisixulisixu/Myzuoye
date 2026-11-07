@@ -58,6 +58,11 @@
 
                 <data android:mimeType="*/*" />
             </intent-filter>
+
+            <!-- 长按图标的快捷入口（搜索设备 / 已收文件 / 最近发送） -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
 
         <activity
@@ -86,6 +91,25 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 插电 / 拔电时顺手刷新小组件（电源广播不在隐式广播限制里） -->
+        <receiver
+            android:name=".widget.WidgetEventReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.ACTION_POWER_CONNECTED" />
+                <action android:name="android.intent.action.ACTION_POWER_DISCONNECTED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 通知栏「取消」：不需要跳界面，点一下就把当前传输停掉 -->
+        <receiver
+            android:name=".service.TransferActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.myzuoye.action.CANCEL_TRANSFER" />
             </intent-filter>
         </receiver>
 

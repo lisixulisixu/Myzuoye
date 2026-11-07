@@ -25,6 +25,12 @@ object WidgetState {
     private const val KEY_PROGRESS = "progress"
     private const val KEY_PEER = "peer"
 
+    /** 传输速度（字节/秒），0 表示还没采到样本 */
+    private const val KEY_SPEED = "speed"
+
+    /** 预计剩余秒数，0 表示算不出来（总量未知或速度为 0） */
+    private const val KEY_ETA = "eta"
+
     data class Snapshot(
         val connected: Boolean,
         val transferring: Boolean,
@@ -33,7 +39,11 @@ object WidgetState {
         /** 0..100，仅在传输中有效 */
         val progress: Int,
         /** 已连接的对端名称，没有则为空 */
-        val peer: String
+        val peer: String,
+        /** 传输速度（字节/秒），没有在传时为 0 */
+        val speed: Int = 0,
+        /** 预计剩余秒数，算不出来时为 0 */
+        val etaSeconds: Int = 0
     )
 
     private fun prefs(context: Context) =
@@ -47,7 +57,9 @@ object WidgetState {
             receivedCount = p.getInt(KEY_RECEIVED_COUNT, 0),
             transferName = p.getString(KEY_TRANSFER_NAME, "").orEmpty(),
             progress = p.getInt(KEY_PROGRESS, 0).coerceIn(0, 100),
-            peer = p.getString(KEY_PEER, "").orEmpty()
+            peer = p.getString(KEY_PEER, "").orEmpty(),
+            speed = p.getInt(KEY_SPEED, 0),
+            etaSeconds = p.getInt(KEY_ETA, 0)
         )
     }
 
@@ -81,13 +93,17 @@ object WidgetState {
         context: Context,
         transferring: Boolean,
         name: String = "",
-        progress: Int = 0
+        progress: Int = 0,
+        speed: Long = 0L,
+        etaSeconds: Long = 0L
     ) {
         val p = prefs(context)
         val current = p.getBoolean(KEY_TRANSFERRING, false)
         val currentName = p.getString(KEY_TRANSFER_NAME, "").orEmpty()
         val safeName = if (transferring) name else ""
         val safeProgress = if (transferring) progress.coerceIn(0, 100) else 0
+        val safeSpeed = if (transferring) speed.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt() else 0
+        val safeEta = if (transferring) etaSeconds.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt() else 0
 
         val sameState = current == transferring && currentName == safeName
         // 同一文件的高频进度：只有跨过 5% 才值得刷新一次
@@ -98,6 +114,8 @@ object WidgetState {
             .putBoolean(KEY_TRANSFERRING, transferring)
             .putString(KEY_TRANSFER_NAME, safeName)
             .putInt(KEY_PROGRESS, safeProgress)
+            .putInt(KEY_SPEED, safeSpeed)
+            .putInt(KEY_ETA, safeEta)
             .apply()
         TransferWidgetProvider.refresh(context)
     }

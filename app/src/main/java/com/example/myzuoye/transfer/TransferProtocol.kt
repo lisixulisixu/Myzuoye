@@ -50,12 +50,27 @@ object TransferProtocol {
     const val TYPE_FILE_RESUME: Byte = 0x06
 
     /**
+     * 报到帧：连上之后、传任何东西之前，客户端先自报家门。
+     *
+     * payload：`版本号(1) + 配对码长度(2) + 配对码(UTF-8)`
+     *
+     * 配对码为空表示「本机没拿到码」——组主没开校验时随便传什么都能过，
+     * 开了校验就会被拒。这样新旧客户端都能连：不带报到帧的老客户端
+     * 在没开校验时照旧能用，开了校验才会被拦下（这是有意的，安全优先）。
+     */
+    const val TYPE_HELLO: Byte = 0x07
+
+    /** 拒绝接入：payload 为 UTF-8 的原因，供界面显示 */
+    const val TYPE_PAIR_REJECT: Byte = 0x08
+
+    /**
      * 当前协议版本，写在文件头的第 1 个字节。
      *
      * - 0：早期版本，文件头带 MD5、结束帧只有字节数
      * - 2：文件头 MD5 可为占位符、结束帧带 MD5、支持续传握手
+     * - 3：新增报到帧与拒绝帧（配对码校验）
      */
-    const val VERSION: Byte = 2
+    const val VERSION: Byte = 3
 
     /**
      * 分片大小。
@@ -145,6 +160,25 @@ object TransferProtocol {
         writeFrame(out, TYPE_FILE_RESUME, payload)
     }
 
+    /** 报到：把本机知道的配对码带上（没有就传空串） */
+    fun writeHello(out: DataOutputStream, pairCode: String) {
+        val codeBytes = pairCode.toByteArray(StandardCharsets.UTF_8)
+        val payload = ByteArray(1 + 2 + codeBytes.size)
+        payload[0] = VERSION
+        payload[1] = (codeBytes.size ushr 8).toByte()
+        payload[2] = codeBytes.size.toByte()
+        System.arraycopy(codeBytes, 0, payload, 3, codeBytes.size)
+        writeFrame(out, TYPE_HELLO, payload)
+    }
+
+    /** 拒绝接入，[reason] 会直接显示在对端界面上 */
+    fun writePairReject(out: DataOutputStream, reason: String) {
+        val payload = reason.toByteArray(StandardCharsets.UTF_8)
+        // 原因文案很短，截一下防止异常字符串把帧撑大
+        val safe = if (payload.size > 512) payload.copyOf(512) else payload
+        writeFrame(out, TYPE_PAIR_REJECT, safe)
+    }
+
     private fun writeFrame(out: DataOutputStream, type: Byte, payload: ByteArray) {
         out.writeByte(type.toInt())
         out.writeInt(payload.size)
@@ -201,8 +235,16 @@ object TransferProtocol {
             return FileHeader(name, size, md5, version)
         }
 
-        /** 解析续传应答里的偏移量 */
-        fun asResumeOffset(): Long {
+        /** 解析报到帧里的配对码；不是报到帧或格式不对时返回 null */
+        fun asPairCode(): String? {
+            if (type != TYPE_HELLO) return null
+            if (payload.size < 3) return null
+            val len = ((payload[1].toInt() and 0xFF) shl 8) or (payload[2].toInt() and 0xFF)
+            if (len < 0 || 3 + len > payload.size) return null
+            return String(payload, 3, len, StandardCharsets.UTF_8)
+        }
+
+        /** 解析续传应答里的偏移量 */        fun asResumeOffset(): Long {
             check(type == TYPE_FILE_RESUME) { "不是续传应答帧" }
             check(payload.size >= 8) { "续传应答长度异常：${payload.size}" }
             return readLong(payload, 0)

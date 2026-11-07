@@ -136,6 +136,16 @@ class TransferService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // 取消动作：直接发给广播接收器，不把用户拉进应用
+        val cancelIntent = PendingIntent.getBroadcast(
+            this,
+            1,
+            Intent(TransferActionReceiver.ACTION_CANCEL).setClass(
+                this, TransferActionReceiver::class.java
+            ),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(text)
@@ -143,6 +153,8 @@ class TransferService : Service() {
             .setContentIntent(contentIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            // 只有真的有进度（正在传）才给「取消」，传完了的通知不该还挂着它
+            .addAction(0, getString(R.string.notif_cancel), cancelIntent)
 
         if (max > 0) {
             builder.setProgress(max, progress, false)

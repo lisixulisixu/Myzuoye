@@ -14,6 +14,7 @@ import android.widget.RemoteViews
 import com.example.myzuoye.MainActivity
 import com.example.myzuoye.R
 import com.example.myzuoye.ReceivedFilesActivity
+import com.example.myzuoye.util.Formatters
 import com.example.myzuoye.weather.WeatherCondition
 import com.example.myzuoye.weather.WeatherRepository
 import java.text.SimpleDateFormat
@@ -103,6 +104,16 @@ class TransferWidgetProvider : AppWidgetProvider() {
         private const val COMPACT_WIDTH_DP = 210
         private const val COMPACT_HEIGHT_DP = 96
 
+        /** 两个方向都小于这个值 → 1×1 极简卡（只留温度与天气图标） */
+        private const val TINY_MAX_DP = 110
+
+        /** 够大就上 4×4 大卡：逐小时曲线 + 天文信息 + 快捷按钮 */
+        private const val LARGE_MIN_WIDTH_DP = 250
+        private const val LARGE_MIN_HEIGHT_DP = 200
+
+        /** 画面变体计数（伪动效，见 WeatherSceneRenderer.renderBackground 的 variant 参数） */
+        private const val KEY_RENDER_VARIANT = "render_variant"
+
         private const val RENDER_PREFS = "widget_render"
 
         private fun renderPrefs(context: Context) =
@@ -136,16 +147,25 @@ class TransferWidgetProvider : AppWidgetProvider() {
                 manager.partiallyUpdateAppWidget(widgetId, buildViews(context, model, full = false))
             } else {
                 manager.updateAppWidget(widgetId, buildViews(context, model, full = true))
-                prefs.edit().putString(key, model.sceneKey).apply()
+                prefs.edit()
+                    .putString(key, model.sceneKey)
+                    // 换下一帧画面变体：下次完整刷新时云会长得不一样
+                    .putInt(KEY_RENDER_VARIANT, (model.sceneVariant + 1) % 4)
+                    .apply()
             }
         }
 
         // -------------------------------------------------------------- 数据
 
+        /** 卡片三档形态：1×1 极简、4×2 标准、4×4 大卡 */
+        internal enum class CardSize { TINY, STANDARD, LARGE }
+
         internal data class Model(
             val compact: Boolean,
+            val size: CardSize,
             val condition: WeatherCondition,
             val sceneDay: Boolean,
+            val sceneVariant: Int,
             val mainColor: Int,
             val subColor: Int,
             val weakColor: Int,
@@ -158,11 +178,16 @@ class TransferWidgetProvider : AppWidgetProvider() {
             val statusText: String,
             val dotColor: Int,
             val secondLine: String,
+            /** 大卡第二行细节：日出日落 / 紫外线 / 体感 */
+            val detailText: String,
             val transferring: Boolean,
             val progress: Int,
             val showTitle: Boolean,
             val showCity: Boolean,
-            val celestialSizePx: Int
+            val celestialSizePx: Int,
+            /** 逐小时温度，大卡上画曲线用；不足两个点就隐藏图表 */
+            val hourlyTemps: List<Int> = emptyList(),
+            val hourlyStartHour: Int = 0
         )
 
         internal fun buildModel(
@@ -195,6 +220,11 @@ class TransferWidgetProvider : AppWidgetProvider() {
             val widthPx = (widthDp * density).toInt().coerceAtLeast(200)
             val heightPx = (heightDp * density).toInt().coerceAtLeast(120)
             val compact = widthDp < COMPACT_WIDTH_DP || heightDp < COMPACT_HEIGHT_DP
+            val size = when {
+                widthDp < TINY_MAX_DP || heightDp < TINY_MAX_DP -> CardSize.TINY
+                widthDp >= LARGE_MIN_WIDTH_DP && heightDp >= LARGE_MIN_HEIGHT_DP -> CardSize.LARGE
+                else -> CardSize.STANDARD
+            }
 
             // 系统深色时按夜间调色板画，哪怕当地是白天
             val systemNight = isSystemNight(context)
@@ -263,9 +293,32 @@ class TransferWidgetProvider : AppWidgetProvider() {
             }
 
             val secondLine = if (snap.transferring && snap.transferName.isNotBlank()) {
-                context.getString(R.string.widget_receiving, snap.transferName)
+                buildString {
+                    append(snap.transferName)
+                    if (snap.speed > 0) {
+                        append(" · ").append(Formatters.speed(snap.speed.toLong()))
+                        if (snap.etaSeconds > 0) {
+                            append(" · 剩 ").append(Formatters.duration(snap.etaSeconds.toLong()))
+                        }
+                    }
+                }
             } else {
                 context.getString(R.string.widget_received, snap.receivedCount)
+            }
+
+            // 大卡的第二行细节：日出日落 / 紫外线 / 体感，没有数据就不占地方
+            val detailText = buildString {
+                if (weather.sunrise.isNotBlank() && weather.sunset.isNotBlank()) {
+                    append(context.getString(R.string.widget_sun, weather.sunrise, weather.sunset))
+                }
+                weather.uvIndex?.let {
+                    if (isNotEmpty()) append(" · ")
+                    append(context.getString(R.string.widget_uv, it))
+                }
+                weather.apparentC?.let {
+                    if (isNotEmpty()) append(" · ")
+                    append(context.getString(R.string.widget_feels, it))
+                }
             }
 
             // 天体大小跟着卡片走：2×2 卡片上给 56dp，4×2 封顶 100dp，
@@ -274,16 +327,23 @@ class TransferWidgetProvider : AppWidgetProvider() {
                 .coerceIn(56f * density, CELESTIAL_SIZE_DP * density)
                 .toInt()
 
+            // 每次完整刷新换一帧画面变体（云的位置不同），让卡片不像一张死图。
+            // 只在真正重绘时递增，部分更新不会动它。
+            val variant = renderPrefs(context).getInt(KEY_RENDER_VARIANT, 0)
+
             val sceneKey = buildString {
                 append(weather.condition.name).append('_').append(sceneDay)
                 append('_').append(widthPx).append('x').append(heightPx)
                 append('_').append(compact)
+                append("_v").append(variant)
             }
 
             return Model(
                 compact = compact,
+                size = size,
                 condition = weather.condition,
                 sceneDay = sceneDay,
+                sceneVariant = variant,
                 mainColor = mainColor,
                 subColor = subColor,
                 weakColor = weakColor,
@@ -296,11 +356,14 @@ class TransferWidgetProvider : AppWidgetProvider() {
                 statusText = statusText,
                 dotColor = dotColor,
                 secondLine = secondLine,
+                detailText = detailText,
                 transferring = snap.transferring,
                 progress = snap.progress,
                 showTitle = !compact,
                 showCity = !compact && heightDp >= 100,
-                celestialSizePx = celestialSizePx
+                celestialSizePx = celestialSizePx,
+                hourlyTemps = weather.hourlyTemps,
+                hourlyStartHour = weather.hourlyStartHour
             )
         }
 
@@ -314,35 +377,53 @@ class TransferWidgetProvider : AppWidgetProvider() {
         /**
          * @param full true 时设置场景位图（整张卡片重建）；
          *             false 时只提交文字/进度/可见性（部分更新）。
+         *
+         * 三种形态各用一套布局：1×1 只留温度和天气，4×2 是常规卡，
+         * 4×4 才摊开逐小时曲线和快捷按钮——小卡片塞不下就别硬塞。
          */
-        internal fun buildViews(context: Context, model: Model, full: Boolean): RemoteViews {
-            val views = RemoteViews(context.packageName, R.layout.widget_transfer)
-
-            if (full) {
-                views.setImageViewBitmap(
-                    R.id.widgetScene,
-                    WeatherSceneRenderer.renderBackground(
-                        model.widthPx, model.heightPx, model.condition, model.sceneDay
-                    )
-                )
-
-                // 紧凑模式不放天体：2×2 的卡片上一颗太阳会把文字挤没
-                val celestial = if (model.compact) {
-                    null
-                } else {
-                    WeatherSceneRenderer.renderCelestial(
-                        model.celestialSizePx, model.condition, model.sceneDay
-                    )
-                }
-                if (celestial != null) {
-                    views.setViewVisibility(R.id.widgetCelestial, View.VISIBLE)
-                    views.setImageViewBitmap(R.id.widgetCelestial, celestial)
-                } else {
-                    views.setViewVisibility(R.id.widgetCelestial, View.GONE)
-                }
+        internal fun buildViews(context: Context, model: Model, full: Boolean): RemoteViews =
+            when (model.size) {
+                CardSize.TINY -> buildTiny(context, model, full)
+                CardSize.LARGE -> buildLarge(context, model, full)
+                CardSize.STANDARD -> buildStandard(context, model, full)
             }
 
-            // ---- 文字 ----
+        /** 场景位图 + 天体层，三套布局共用 */
+        private fun applyScene(
+            views: RemoteViews,
+            model: Model,
+            full: Boolean,
+            showCelestial: Boolean
+        ) {
+            if (!full) return
+            views.setImageViewBitmap(
+                R.id.widgetScene,
+                WeatherSceneRenderer.renderBackground(
+                    model.widthPx, model.heightPx, model.condition, model.sceneDay,
+                    model.sceneVariant
+                )
+            )
+            val celestial = if (!showCelestial) {
+                null
+            } else {
+                WeatherSceneRenderer.renderCelestial(
+                    model.celestialSizePx, model.condition, model.sceneDay
+                )
+            }
+            if (celestial != null) {
+                views.setViewVisibility(R.id.widgetCelestial, View.VISIBLE)
+                views.setImageViewBitmap(R.id.widgetCelestial, celestial)
+            } else {
+                views.setViewVisibility(R.id.widgetCelestial, View.GONE)
+            }
+        }
+
+        /** 4×2 常规卡 */
+        private fun buildStandard(context: Context, model: Model, full: Boolean): RemoteViews {
+            val views = RemoteViews(context.packageName, R.layout.widget_transfer)
+            // 紧凑模式不放天体：2×2 的卡片上一颗太阳会把文字挤没
+            applyScene(views, model, full, showCelestial = !model.compact)
+
             views.setViewVisibility(
                 R.id.widgetTitle, if (model.showTitle) View.VISIBLE else View.GONE
             )
@@ -373,15 +454,8 @@ class TransferWidgetProvider : AppWidgetProvider() {
             views.setTextViewText(R.id.widgetReceived, model.secondLine)
             views.setInt(R.id.widgetDot, "setColorFilter", model.dotColor)
 
-            // ---- 传输进度 ----
-            if (model.transferring) {
-                views.setViewVisibility(R.id.widgetProgress, View.VISIBLE)
-                views.setProgressBar(R.id.widgetProgress, 100, model.progress, false)
-            } else {
-                views.setViewVisibility(R.id.widgetProgress, View.GONE)
-            }
+            setProgress(views, model)
 
-            // ---- 点击区域 ----
             // 整张卡片进应用；状态行直接进「已收文件」；城市行刷新天气
             views.setOnClickPendingIntent(R.id.widgetRoot, activityIntent(context, 1, null))
             views.setOnClickPendingIntent(
@@ -389,8 +463,104 @@ class TransferWidgetProvider : AppWidgetProvider() {
                 activityIntent(context, 2, ReceivedFilesActivity::class.java)
             )
             views.setOnClickPendingIntent(R.id.widgetCity, refreshIntent(context))
-
             return views
+        }
+
+        /** 4×4 大卡：温度 + 逐小时曲线 + 天文信息 + 三个快捷按钮 */
+        private fun buildLarge(context: Context, model: Model, full: Boolean): RemoteViews {
+            val views = RemoteViews(context.packageName, R.layout.widget_transfer_large)
+            applyScene(views, model, full, showCelestial = true)
+
+            views.setTextViewText(R.id.widgetTitle, context.getString(R.string.widget_title))
+            views.setTextColor(R.id.widgetTitle, model.mainColor)
+
+            views.setTextViewText(R.id.widgetTemp, model.tempText)
+            views.setTextColor(R.id.widgetTemp, model.mainColor)
+
+            views.setTextViewText(R.id.widgetCondition, model.conditionText)
+            views.setTextColor(R.id.widgetCondition, model.subColor)
+
+            views.setTextViewText(R.id.widgetCity, model.cityText)
+            views.setTextColor(R.id.widgetCity, model.weakColor)
+
+            views.setTextViewText(R.id.widgetDetail, model.detailText)
+            views.setTextColor(R.id.widgetDetail, model.weakColor)
+            views.setViewVisibility(
+                R.id.widgetDetail, if (model.detailText.isBlank()) View.GONE else View.VISIBLE
+            )
+
+            // 逐小时曲线：数据不够就整块隐藏，不留一个空白条
+            if (full) {
+                val density = context.resources.displayMetrics.density
+                val chartW = (model.widthPx - 26f * density).toInt()
+                val chartH = (model.heightPx * 0.30f)
+                    .toInt()
+                    .coerceIn((54f * density).toInt(), (104f * density).toInt())
+                val chart = HourlyChartRenderer.render(
+                    widthPx = chartW,
+                    heightPx = chartH,
+                    temps = model.hourlyTemps,
+                    startHour = model.hourlyStartHour,
+                    lineColor = model.mainColor,
+                    textColor = model.weakColor,
+                    dotColor = model.mainColor
+                )
+                if (chart != null) {
+                    views.setViewVisibility(R.id.widgetChart, View.VISIBLE)
+                    views.setImageViewBitmap(R.id.widgetChart, chart)
+                } else {
+                    views.setViewVisibility(R.id.widgetChart, View.GONE)
+                }
+            }
+
+            views.setTextViewText(R.id.widgetStatus, model.statusText)
+            views.setTextColor(R.id.widgetStatus, model.subColor)
+            views.setTextViewText(R.id.widgetReceived, model.secondLine)
+            views.setTextColor(R.id.widgetReceived, model.weakColor)
+            views.setInt(R.id.widgetDot, "setColorFilter", model.dotColor)
+
+            setProgress(views, model)
+
+            // 快捷按钮：刷新天气 / 已收文件 / 打开应用
+            views.setOnClickPendingIntent(R.id.widgetBtnRefresh, refreshIntent(context, 3))
+            views.setOnClickPendingIntent(
+                R.id.widgetBtnFiles,
+                activityIntent(context, 4, ReceivedFilesActivity::class.java)
+            )
+            views.setOnClickPendingIntent(R.id.widgetBtnOpen, activityIntent(context, 5, null))
+            views.setOnClickPendingIntent(R.id.widgetRoot, activityIntent(context, 1, null))
+            return views
+        }
+
+        /** 1×1 极简卡：只有温度和天气 */
+        private fun buildTiny(context: Context, model: Model, full: Boolean): RemoteViews {
+            val views = RemoteViews(context.packageName, R.layout.widget_transfer_tiny)
+            if (full) {
+                views.setImageViewBitmap(
+                    R.id.widgetScene,
+                    WeatherSceneRenderer.renderBackground(
+                        model.widthPx, model.heightPx, model.condition, model.sceneDay,
+                        model.sceneVariant
+                    )
+                )
+            }
+            views.setTextViewText(R.id.widgetTemp, model.tempText)
+            views.setTextColor(R.id.widgetTemp, model.mainColor)
+            views.setTextViewText(R.id.widgetCondition, model.condition.label)
+            views.setTextColor(R.id.widgetCondition, model.subColor)
+            // 小卡也带上状态点：连着的时候一眼能看出来
+            views.setInt(R.id.widgetDot, "setColorFilter", model.dotColor)
+            views.setOnClickPendingIntent(R.id.widgetRoot, activityIntent(context, 1, null))
+            return views
+        }
+
+        private fun setProgress(views: RemoteViews, model: Model) {
+            if (model.transferring) {
+                views.setViewVisibility(R.id.widgetProgress, View.VISIBLE)
+                views.setProgressBar(R.id.widgetProgress, 100, model.progress, false)
+            } else {
+                views.setViewVisibility(R.id.widgetProgress, View.GONE)
+            }
         }
 
         private fun activityIntent(context: Context, requestCode: Int, target: Class<*>?): PendingIntent {
@@ -405,13 +575,13 @@ class TransferWidgetProvider : AppWidgetProvider() {
             )
         }
 
-        private fun refreshIntent(context: Context): PendingIntent {
+        private fun refreshIntent(context: Context, requestCode: Int = 3): PendingIntent {
             val intent = Intent(context, TransferWidgetProvider::class.java).apply {
                 action = ACTION_REFRESH_WEATHER
             }
             return PendingIntent.getBroadcast(
                 context,
-                3,
+                requestCode,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )

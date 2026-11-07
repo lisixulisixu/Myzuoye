@@ -106,8 +106,68 @@ object TransferManager {
         p2pNetwork = network
     }
 
+    /**
+     * 设置本机作为组主时的配对码；传 null / 空串表示不校验。
+     *
+     * 只影响「以后接入的设备」，当前已连上的那条连接不会被踢掉。
+     */
+    fun setPairCode(code: String?) {
+        pairCode = code?.trim()?.takeIf { it.isNotEmpty() }
+        // 正在监听时立刻把新状态写出去，用户切完开关就能在界面上看到码
+        if (listening) {
+            val c = pairCode
+            emit(
+                State.LISTENING,
+                if (c == null) "已监听端口 $port，配对码校验已关闭"
+                else "已监听端口 $port，配对码 $c，等待对方接入"
+            )
+        }
+    }
+
+    /** 本机当前的配对码（没有则为 null），界面用来回显 */
+    fun currentPairCode(): String? = pairCode
+
+    /**
+     * 用新的配对码重连上一次的地址。
+     *
+     * 场景：组主开了校验，我们连上去被回了一个拒绝帧，
+     * 界面弹框让用户输入 4 位码，输完走这里。
+     */
+    fun retryWithPairCode(code: String): Boolean {
+        val host = lastHost ?: return false
+        clientPairCode = code.trim()
+        connect(host, lastPort)
+        return true
+    }
+
     @Volatile
     private var socket: Socket? = null
+
+    /**
+     * 组主开启的配对码；null / 空串表示不校验。
+     *
+     * 由界面在启动与切换开关时写入：开了之后，接入方必须在报到帧里带对码，
+     * 否则直接拒绝（连文本通道都不给）。
+     */
+    @Volatile
+    private var pairCode: String? = null
+
+    /** 客户端自己记着的配对码：连不上被打回时，界面输入正确码后由 [retryWithPairCode] 更新 */
+    @Volatile
+    private var clientPairCode: String = ""
+
+    /** 上一次连接的地址，用于「配对码输错后重试」与「意外断连自动重连一次」 */
+    @Volatile
+    private var lastHost: String? = null
+
+    @Volatile
+    private var lastPort: Int = TransferProtocol.PORT
+
+    /** 断连自动重连只用一次，避免来回刷 */
+    private var autoReconnectUsed = false
+
+    /** 对端因配对码拒绝时回调（主线程），参数是对方给的原因 */
+    var onPairRejected: ((String) -> Unit)? = null
 
     /** 最近一次真的有字节流动的时刻（毫秒），断连看门狗用它判断链路是否还活着 */
     @Volatile
@@ -205,7 +265,13 @@ object TransferManager {
             try {
                 ss = bindWithRetry(port)
                 serverSocket = ss
-                emit(State.LISTENING, "已监听端口 $port，等待对方接入")
+                // 开了校验就把码打在状态里，用户能直接念给对面听
+                val code = pairCode
+                emit(
+                    State.LISTENING,
+                    if (code == null) "已监听端口 $port，等待对方接入"
+                    else "已监听端口 $port，配对码 $code，等待对方接入"
+                )
 
                 while (currentCoroutineContext().isActive) {
                     val client = ss.accept()
@@ -224,7 +290,12 @@ object TransferManager {
                         continue
                     }
 
+                    // 开了配对码校验就先验码，验不过直接关门，
+                    // 连「已接入」状态都不发——不给未授权设备留任何通道
+                    if (!verifyPair(client)) continue
+
                     emit(State.CONNECTED, "对方已接入：${client.inetAddress.hostAddress}")
+                    autoReconnectUsed = false
                     readLoop(client)
                     emit(State.LISTENING, "连接已断开，继续等待")
                 }
@@ -268,6 +339,52 @@ object TransferManager {
             .onFailure { emit(State.CONNECTING, "绑定 P2P 网络失败：${it.message}") }
     }
 
+    /**
+     * 组主侧：校验接入方带来的配对码。
+     *
+     * 这里刻意用**不缓冲**的输入流。如果套一层 `BufferedInputStream`，
+     * 它可能把报到帧后面的字节一起读进自己的缓冲区，而 [readLoop] 又会
+     * 另起一个流去读同一个 socket——那部分字节就永久丢了。
+     * `readFrame` 本身按长度 `readFully`，多读不了一个字节。
+     */
+    private fun verifyPair(client: Socket): Boolean {
+        val required = pairCode?.trim().orEmpty()
+        if (required.isEmpty()) return true
+
+        return try {
+            // 报到帧在连上之后立刻发出，正常几十毫秒就到；等不到就说明
+            // 对端是没带码的老客户端，或者干脆不是我们的客户端
+            client.soTimeout = PAIR_WAIT_MS
+            val input = DataInputStream(client.getInputStream())
+            val code = TransferProtocol.readFrame(input)?.asPairCode()
+            client.soTimeout = 0
+
+            if (code == required) {
+                appendAndNotify("配对码校验通过：${client.inetAddress.hostAddress}")
+                true
+            } else {
+                runCatching {
+                    val out = DataOutputStream(client.getOutputStream())
+                    TransferProtocol.writePairReject(
+                        out,
+                        if (code.isNullOrBlank()) "对方没提供配对码" else "配对码不正确"
+                    )
+                }
+                appendAndNotify(
+                    if (code.isNullOrBlank()) "有设备未提供配对码，已拒绝接入"
+                    else "有设备配对码不正确，已拒绝接入"
+                )
+                runCatching { client.close() }
+                false
+            }
+        } catch (e: Exception) {
+            // SocketTimeoutException 会走到这里：对端连上却一声不吭，按拒绝处理
+            appendAndNotify("接入方没有完成配对，已断开：${e.javaClass.simpleName}")
+            runCatching { client.close() }
+            false
+        }
+    }
+
     // ------------------------------------------------------------------ 客户端
 
     /**
@@ -278,9 +395,18 @@ object TransferManager {
      * - 重试间隔从 200ms 起步逐步拉长，地址一分配好就能立刻连上，
      *   不像原来每次固定等 1 秒、失败还要 4 秒超时。
      */
-    fun connect(host: String, port: Int = TransferProtocol.PORT, attempts: Int = 16) {
+    fun connect(
+        host: String,
+        port: Int = TransferProtocol.PORT,
+        attempts: Int = 16,
+        auto: Boolean = false
+    ) {
         if (state == State.CONNECTED) return
         if (connectJob?.isActive == true) return
+
+        // 用户自己发起的连接重新给一次自动重连额度；
+        // 自动重连自身不能再重置，否则「连上就被踢」会变成无限重连
+        if (!auto) autoReconnectUsed = false
 
         this.port = port
         connectJob = scope.launch {
@@ -294,6 +420,20 @@ object TransferManager {
                     val client = Socket()
                     bindToP2pNetwork(client)
                     client.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
+
+                    // 报到：把本机记得的配对码带上。组主开了校验而码不对，
+                    // 它会立刻回一个拒绝帧并把连接关掉，走 [readLoop] 里的处理。
+                    runCatching {
+                        val hello = DataOutputStream(client.getOutputStream())
+                        TransferProtocol.writeHello(hello, clientPairCode)
+                        hello.flush()
+                    }
+
+                    lastHost = host
+                    lastPort = port
+                    // 注意：这里不能重置 autoReconnectUsed。连上就被踢的场景（比如
+                    // 配对码不对）会让「成功 → 断开 → 自动重连」自己转圈，
+                    // 额度只在用户主动发起连接时恢复。
                     emit(State.CONNECTED, "已连接到 $host:$port")
                     readLoop(client)
                     return@launch
@@ -453,6 +593,9 @@ object TransferManager {
         val out = DataOutputStream(client.getOutputStream().buffered())
         output = out
         startWatchdog()
+        // 被对端拒绝（配对码不对）时不再自动重连：重连还是会以同样的码被拒，
+        // 只会来回刷日志，等用户输了新码由 retryWithPairCode 主动连
+        var rejectedByPeer = false
 
         try {
             while (currentCoroutineContext().isActive) {
@@ -462,7 +605,7 @@ object TransferManager {
                 when (frame.type) {
                     TransferProtocol.TYPE_TEXT -> {
                         val text = frame.asText()
-                        if (text.isNotBlank()) appendAndNotify("对方：$text")
+                        if (text.isNotBlank()) appendAndNotify("$PEER_PREFIX$text")
                     }
 
                     TransferProtocol.TYPE_FILE_HEADER -> handleFileHeader(frame, out)
@@ -476,6 +619,20 @@ object TransferManager {
                     // 续传应答只对正在发送的一方有意义，交给等待中的发送协程
                     TransferProtocol.TYPE_FILE_RESUME -> {
                         runCatching { resumeQueue.offer(frame.asResumeOffset()) }
+                    }
+
+                    // 报到帧：组主没开校验时会收到它，什么都不用做
+                    TransferProtocol.TYPE_HELLO -> Unit
+
+                    // 被拒：多半是配对码不对。这里不走「连接异常」，
+                    // 而是明确告诉界面去要码，用户输了正确码还能接着连
+                    TransferProtocol.TYPE_PAIR_REJECT -> {
+                        val reason = frame.asText().ifBlank { "对方拒绝了本次连接" }
+                        appendAndNotify(reason)
+                        rejectedByPeer = true
+                        mainHandler.post { onPairRejected?.invoke(reason) }
+                        emit(State.IDLE, reason)
+                        break
                     }
 
                     // 未知帧只记日志，不能把整个通道判为 ERROR——
@@ -496,6 +653,31 @@ object TransferManager {
             // 无条件复位：即使中途被标成 ERROR，断开后也要回到 IDLE，
             // 否则界面会一直卡在“出错”且无法重连。
             if (state != State.IDLE) emit(State.IDLE, "通道已断开")
+
+            // 已经被 cancel（用户点了断开 / stop()）时协程不再是 active，
+            // 这种「主动断开」不该自动连回去
+            val stillActive = currentCoroutineContext().isActive
+            if (stillActive && !rejectedByPeer) scheduleAutoReconnect()
+        }
+    }
+
+    /**
+     * 自动重连：只做一次，只对客户端角色有效（组主没有「主动连回去」的概念）。
+     *
+     * 目的很有限——网络瞬断时把通道接回来，让用户不用手动再点一遍；
+     * 已经传了一半的文件靠续传机制接着传，这里不碰任何传输状态。
+     */
+    private fun scheduleAutoReconnect() {
+        val host = lastHost ?: return
+        if (autoReconnectUsed) return
+
+        autoReconnectUsed = true
+        appendAndNotify("连接意外断开，正在自动重连…")
+        scope.launch {
+            delay(AUTO_RECONNECT_DELAY_MS)
+            // 上一轮的 connect 协程可能还挂在 connectJob 上，不清掉会让 connect() 直接 return
+            connectJob = null
+            connect(host, lastPort, attempts = 8, auto = true)
         }
     }
 
@@ -690,6 +872,20 @@ object TransferManager {
     }
 
     private fun handleFileCancel() {
+        // 对端作废这次传输时，如果本机正在发，也要立刻停手：
+        // 否则对方已经不再写盘，我们还会把剩下的分片全推过去，白耗流量还卡着界面。
+        // 这里不调 cancelSend()，因为它会再回一个取消帧，两边互相弹。
+        if (sending) {
+            sendJob?.cancel()
+            sendJob = null
+            sending = false
+            sendingTotalBytes = 0
+            stopService()
+            appendAndNotify("对方取消了接收")
+            mainHandler.post { onSendDone?.invoke(false) }
+            return
+        }
+
         val target = receiveTarget
         // 对方主动取消：半成品留着，下次同名同大小可以直接续上
         abortReceive(keepPartial = true)
@@ -698,6 +894,28 @@ object TransferManager {
             mainHandler.post { onReceiveDone?.invoke(null) }
             stopService()
         }
+    }
+
+    /**
+     * 取消「当前正在进行的传输」，发送和接收都覆盖。
+     *
+     * 界面上的取消按钮、通知栏的取消动作都走这里：
+     * - 正在发：交给 [cancelSend]（会给对端发取消帧）
+     * - 正在收：先通知对端别再发了，再丢掉本地半成品（用户主动放弃，不值得留着续传）
+     */
+    fun cancelActive(): Boolean {
+        if (sending) return cancelSend()
+        if (receiveTarget == null) return false
+
+        val out = output
+        if (out != null) {
+            runCatching { synchronized(writeLock) { TransferProtocol.writeFileCancel(out) } }
+        }
+        abortReceive(keepPartial = false)
+        appendAndNotify("已取消接收")
+        mainHandler.post { onReceiveDone?.invoke(null) }
+        stopService()
+        return true
     }
 
     private fun abortReceive(keepPartial: Boolean = true) {
@@ -878,6 +1096,9 @@ object TransferManager {
     /** 是否正在发送文件 */
     val isSending: Boolean get() = sending
 
+    /** 是否正在接收文件（已经建好落盘目标、还没写完） */
+    val isReceiving: Boolean get() = receiveTarget != null
+
     /**
      * 取消当前发送。
      *
@@ -979,6 +1200,17 @@ object TransferManager {
     private const val RESUME_WAIT_MS = 600L
 
     /**
+     * 组主等接入方报到帧的时间。
+     *
+     * 报到帧在 TCP 连上后立刻发出，局域网里几十毫秒就到；
+     * 2 秒都等不到，基本可以确定对方不是带码的新客户端，按拒绝处理。
+     */
+    private const val PAIR_WAIT_MS = 2_000
+
+    /** 意外断连后自动重连一次：稍等一下让旧 socket 彻底释放 */
+    private const val AUTO_RECONNECT_DELAY_MS = 800L
+
+    /**
      * 断连判定：传输中超过这么久没有任何字节流动，就当链路已经死了。
      *
      * 只看「真的在传」的那段时间——空闲挂着的连接可以一直连着聊天，
@@ -991,6 +1223,9 @@ object TransferManager {
 
     /** 已有连接时回给第二个接入方的话，对端会直接显示在聊天区 */
     private const val BUSY_MESSAGE = "对方已有其它设备连接，请稍后再试"
+
+    /** 聊天区里「对方发来的文本」的统一前缀，界面靠它区分收发 */
+    const val PEER_PREFIX = "对方："
     private const val BIND_RETRIES = 3
     private const val BIND_RETRY_DELAY_MS = 300L
 }
