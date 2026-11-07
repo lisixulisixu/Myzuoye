@@ -874,8 +874,10 @@ class MainActivity : AppCompatActivity() {
         controller.onP2pEnabled = { enabled ->
             if (enabled) {
                 if (!searching) tvP2pState.setText(R.string.p2p_state_ready)
-                // 只在已授权时自动开搜，否则交给 onStart 的授权流程，避免重复弹窗
-                if (hasNearbyPermission()) startDiscovery()
+                // 只在已授权时自动开搜，否则交给 onStart 的授权流程，避免重复弹窗；
+                // 协商/组网中系统可能反弹 P2P 状态广播，此时重开搜索只会 BUSY，
+                // 还会干扰正在进行的 GO 协商
+                if (hasNearbyPermission() && !connecting && !p2pConnected) startDiscovery()
             } else {
                 tvP2pState.setText(R.string.p2p_state_off)
                 searching = false
@@ -916,7 +918,9 @@ class MainActivity : AppCompatActivity() {
         controller.onDisconnected = {
             p2pConnected = false
             connecting = false
+            uiHandler.removeCallbacks(connectingTimeout)
             adapter.setConnecting(null)
+            refreshSteps()
             TransferManager.setP2pNetwork(null)
             tvRoleInfo.setText(R.string.role_unknown)
             // 这里不主动关通道：P2P 链路断开时 socket 会自己报错退出，
@@ -925,8 +929,10 @@ class MainActivity : AppCompatActivity() {
 
         controller.onConnectFailed = { reason ->
             connecting = false
+            uiHandler.removeCallbacks(connectingTimeout)
             adapter.setConnecting(null)
             tvP2pState.setText(R.string.p2p_state_ready)
+            refreshSteps()
             toast("连接失败：$reason")
         }
 
@@ -1086,10 +1092,8 @@ class MainActivity : AppCompatActivity() {
         searching = true
 
         tvP2pState.setText(R.string.p2p_state_searching)
-        // 已经连上时，搜索循环（每十几秒一次）不能把四步进度重置回「发现」
-        if (channelState != TransferManager.State.CONNECTED) {
-            updateStep(ConnectionStepsView.STEP_DISCOVER)
-        }
+        // 四步进度由 refreshSteps 按权威状态推导：协商中/已连接时点搜索不会重置进度
+        refreshSteps()
         controller.startDiscovery()
     }
 
@@ -1101,17 +1105,30 @@ class MainActivity : AppCompatActivity() {
         }
         connecting = true
         tvP2pState.setText(R.string.p2p_state_connecting)
-        log("正在连接 ${displayName(device)}（${device.deviceAddress}）")
+        log("正在连接 ${displayName(device)}（${device.deviceAddress}），等待对方确认…")
         // 立刻在列表上标出“连接中”，避免用户重复点击同一条
         adapter.setConnecting(device.deviceAddress)
         connectingPeerName = displayName(device)
-        updateStep(ConnectionStepsView.STEP_NEGOTIATE)
+        refreshSteps()
+        // 超时兜底：个别 ROM 协商失败既不回调 onConnectFailed 也不触发断开广播，
+        // 「邀请中」会永久挂着、设备列表再也点不动。30 秒没结果就复位让用户重试。
+        uiHandler.postDelayed(connectingTimeout, CONNECTING_TIMEOUT_MS)
         controller.connect(device)
+    }
+
+    private val connectingTimeout = Runnable {
+        if (!connecting) return@Runnable
+        connecting = false
+        adapter.setConnecting(null)
+        tvP2pState.setText(R.string.p2p_state_ready)
+        refreshSteps()
+        log("连接协商超时（30 秒无结果），已恢复。请确认对方手机是否弹出了系统确认框")
     }
 
     private fun onConnected(info: WifiP2pInfo) {
         p2pConnected = true
         connecting = false
+        uiHandler.removeCallbacks(connectingTimeout)
         adapter.setConnecting(null)
 
         val role = if (info.isGroupOwner) "组主（GO）" else "客户端"
@@ -1123,7 +1140,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         tvP2pState.setText(R.string.p2p_state_connected)
-        updateStep(ConnectionStepsView.STEP_CHANNEL)
+        refreshSteps()
         tvRoleInfo.text = getString(R.string.role_info, role, groupOwnerIp)
         log("连接成功：$role，组主地址 $groupOwnerIp")
 
@@ -1321,8 +1338,44 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** 更新四步进度，同时记住当前位置（失败时要靠它把红点画对地方） */
-    private fun updateStep(step: Int, failed: Boolean = false) {
-        currentStep = step.coerceAtMost(ConnectionStepsView.STEP_CHANNEL)
+    /**
+     * 四步进度唯一的更新入口：从权威状态（P2P 是否组网、是否在协商、文本通道状态）
+     * 推导当前步骤，而不是到处手动 set。
+     *
+     * 之前散落各处的 updateStep 会互相踩：搜索循环把协商中的进度打回「发现」、
+     * TCP 失败的红叉画到「协商」上（其实 P2P 已经组网成功）。
+     * 现在所有状态变化后都调这一个函数，显示永远和真实状态一致。
+     */
+    private fun refreshSteps() {
+        val (step, failed) = when {
+            // 文本通道已就绪：全链路完成
+            channelState == TransferManager.State.CONNECTED ->
+                ConnectionStepsView.STEP_DONE to false
+
+            // P2P 组网成功后，发现/协商/组网三步已锁定完成；
+            // TCP 连不上属于「通道」阶段的失败，不回退前三步
+            p2pConnected && channelState == TransferManager.State.ERROR ->
+                ConnectionStepsView.STEP_CHANNEL to true
+
+            p2pConnected ->
+                ConnectionStepsView.STEP_CHANNEL to false
+
+            // P2P 协商中（点了设备、等系统弹窗确认）
+            connecting ->
+                ConnectionStepsView.STEP_NEGOTIATE to false
+
+            // 未组网但文本通道出错（局域网直连路径）：红叉留在原地
+            channelState == TransferManager.State.ERROR ->
+                currentStep to true
+
+            // 局域网直连不走 P2P 四阶段，通道在建/监听直接点亮「通道」
+            channelState == TransferManager.State.LISTENING ||
+                channelState == TransferManager.State.CONNECTING ->
+                ConnectionStepsView.STEP_CHANNEL to false
+
+            else -> ConnectionStepsView.STEP_DISCOVER to false
+        }
+        currentStep = step
         steps.setProgress(step, failed)
     }
 
@@ -1343,23 +1396,19 @@ class MainActivity : AppCompatActivity() {
 
         when (state) {
             TransferManager.State.IDLE -> {
-                updateStep(ConnectionStepsView.STEP_DISCOVER)
                 coverLive.setMood(CoverLiveView.MOOD_IDLE)
                 flowBackground.setAccent(COLOR_ACCENT_IDLE, 0.14f)
             }
 
             TransferManager.State.CONNECTING -> {
-                updateStep(ConnectionStepsView.STEP_NEGOTIATE)
                 flowBackground.setAccent(COLOR_ACCENT_IDLE, 0.22f)
             }
 
             TransferManager.State.LISTENING -> {
-                updateStep(ConnectionStepsView.STEP_CHANNEL)
                 flowBackground.setAccent(COLOR_ACCENT_IDLE, 0.20f)
             }
 
             TransferManager.State.CONNECTED -> {
-                updateStep(ConnectionStepsView.STEP_DONE)
                 coverLive.setMood(CoverLiveView.MOOD_CONNECTED)
                 flowBackground.setAccent(COLOR_ACCENT_ONLINE, 0.18f)
                 if (connectingPeerName.isNotBlank()) {
@@ -1368,12 +1417,16 @@ class MainActivity : AppCompatActivity() {
             }
 
             TransferManager.State.ERROR -> {
-                // 保留现场：把红点画在卡住的那一步上，而不是从头再来一遍
-                steps.setProgress(currentStep, failed = true)
                 coverLive.setMood(CoverLiveView.MOOD_ERROR)
                 flowBackground.setAccent(COLOR_ACCENT_ERROR, 0.22f)
+                if (p2pConnected) {
+                    showHint(getString(R.string.channel_error_p2p_ok), HintKind.ERROR)
+                }
             }
         }
+
+        // 四步进度统一由权威状态推导（见 refreshSteps 的说明）
+        refreshSteps()
 
         // 桌面小组件：同步连接状态（内部做了「状态没变不刷新」的判断）
         WidgetState.setConnected(this, state == TransferManager.State.CONNECTED)
@@ -1897,6 +1950,9 @@ class MainActivity : AppCompatActivity() {
 
         /** 自动续搜的检查间隔：系统搜索会自动停止，停了就靠这个把它拉起来 */
         const val DISCOVERY_KEEPALIVE_MS = 6000L
+
+        /** GO 协商的兜底超时：超时后复位「邀请中」，让设备列表恢复可点 */
+        const val CONNECTING_TIMEOUT_MS = 30_000L
 
         /** 搜索遇到 BUSY（系统忙）时的退避时长 */
         const val DISCOVERY_BUSY_BACKOFF_MS = 15000L

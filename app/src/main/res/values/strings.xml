@@ -29,6 +29,7 @@
     <string name="channel_connecting">文本通道：正在连接…</string>
     <string name="channel_connected">文本通道：已连接</string>
     <string name="channel_error">文本通道：出错</string>
+    <string name="channel_error_p2p_ok">设备已连上，但文本通道建立失败；建议点「断开」后重新连接</string>
     <string name="chat_empty">（暂无消息，P2P 连上后即可互发文本）</string>
     <string name="chat_actions_title">消息操作</string>
     <string name="chat_copy">复制文本</string>
