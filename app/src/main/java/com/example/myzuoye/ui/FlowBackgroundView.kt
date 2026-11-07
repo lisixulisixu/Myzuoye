@@ -29,7 +29,7 @@ import kotlin.random.Random
  * - 不重写 onTouchEvent，纯装饰，绝不拦截任何点击；
  * - Shader 只在尺寸变化时创建一次，每帧只做「平移画布 + 改 alpha」，
  *   否则每帧 new 四个 RadialGradient，低端机直接掉帧；
- * - 只在自己可见时跑（onAttached/onDetached 控制），不可见时零开销；
+ * - 只在自己可见且窗口可见时跑（attach + visibility 双重判断），退到后台立刻停，零开销；
  * - 系统关掉动画（开发者选项「动画时长缩放 = 关闭」）时画静态一帧。
  */
 class FlowBackgroundView @JvmOverloads constructor(
@@ -120,6 +120,24 @@ class FlowBackgroundView @JvmOverloads constructor(
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         stopLoop()
+    }
+
+    /**
+     * 退到后台 / 被其它界面盖住时停掉帧循环。
+     *
+     * 只有 attach/detach 是不够的：应用切到后台时 View 仍然 attached，
+     * Choreographer 会继续每帧推进相位并 invalidate 一整屏渐变，纯耗电。
+     */
+    override fun onVisibilityChanged(changedView: View, visibility: Int) {
+        super.onVisibilityChanged(changedView, visibility)
+        if (animationsOff) return
+        if (visibility == VISIBLE && isAttachedToWindow) startLoop() else stopLoop()
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        if (animationsOff) return
+        if (visibility == VISIBLE && isAttachedToWindow) startLoop() else stopLoop()
     }
 
     private fun startLoop() {

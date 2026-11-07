@@ -45,6 +45,9 @@ object TransferManager {
     @Volatile
     private var serviceStarted = false
 
+    /** 上一次更新前台服务通知的时刻，用于节流（见 [NOTIFY_THROTTLE_MS]） */
+    private val notifyLimiter = RateLimiter(NOTIFY_THROTTLE_MS)
+
     fun attach(context: Context) {
         appContext = context.applicationContext
     }
@@ -106,6 +109,12 @@ object TransferManager {
     @Volatile
     private var socket: Socket? = null
 
+    /** 最近一次真的有字节流动的时刻（毫秒），断连看门狗用它判断链路是否还活着 */
+    @Volatile
+    private var lastIoAt = 0L
+
+    private var watchdogJob: Job? = null
+
     @Volatile
     private var output: DataOutputStream? = null
     private val writeLock = Any()
@@ -119,6 +128,7 @@ object TransferManager {
      * 正在接收的文件落盘目标；同一时刻只允许一个接收任务。
      * 具体写公共下载目录还是应用目录，由 [ReceivedFileStore] 按系统版本决定。
      */
+    @Volatile
     private var receiveTarget: ReceiveTarget? = null
 
     /** 边收边算 MD5，避免收完再整读一遍（MediaStore 的 Uri 也不方便当 File 读） */
@@ -344,6 +354,7 @@ object TransferManager {
 
     /** 关闭通道，取消所有任务 */
     fun stop() {
+        stopWatchdog()
         listenJob?.cancel()
         listenJob = null
         connectJob?.cancel()
@@ -381,15 +392,73 @@ object TransferManager {
 
     // ------------------------------------------------------------------ 内部
 
+    // ------------------------------------------------------------------ 断连看门狗
+
+    /** 记一次「链路上真的走过字节」，收发循环里每个分片都调 */
+    private fun touchIo() {
+        lastIoAt = SystemClock.elapsedRealtime()
+    }
+
+    /**
+     * 断连看门狗：处理「对端悄悄消失」这种最难查的卡死。
+     *
+     * 对方拔掉 Wi-Fi、杀进程或锁屏休眠时，本机的 `read()` / `write()` 会一直阻塞，
+     * 界面就永远停在「传输中」，取消按钮也可能点不动。这里每 2 秒看一次，
+     * 传输中一旦连续 [LINK_IDLE_TIMEOUT_MS] 没有任何字节流动，直接把 socket 关掉，
+     * 让阻塞中的读写抛异常、走正常收尾流程（半成品保留，重连后能续传）。
+     *
+     * 只在「真的在传文件」时判定：空闲挂着的连接可以一直连着聊天，那是正常状态，
+     * 所以不能用 socket 读超时一刀切。
+     */
+    private fun startWatchdog() {
+        stopWatchdog()
+        touchIo()
+        watchdogJob = scope.launch {
+            while (isActive) {
+                delay(LINK_WATCHDOG_INTERVAL_MS)
+                if (!sending && receiveTarget == null) {
+                    // 没在传：把时间戳往前推，免得下一次传大文件被这段空闲时间误判
+                    touchIo()
+                    continue
+                }
+                val stalled = linkStalled(
+                    nowMs = SystemClock.elapsedRealtime(),
+                    lastIoAt = lastIoAt,
+                    transferring = true,
+                    idleTimeoutMs = LINK_IDLE_TIMEOUT_MS
+                )
+                if (!stalled) continue
+                killSocket("超过 ${LINK_IDLE_TIMEOUT_MS / 1000} 秒没有任何数据，链路已断开")
+                break
+            }
+        }
+    }
+
+    private fun stopWatchdog() {
+        watchdogJob?.cancel()
+        watchdogJob = null
+    }
+
+    /** 主动关掉 socket，让阻塞中的读写立刻抛异常；状态复位交给 readLoop 的 finally */
+    private fun killSocket(reason: String) {
+        appendAndNotify("连接已关闭：$reason（重新连接后可以断点续传）")
+        val s = socket
+        socket = null
+        runCatching { s?.close() }
+    }
+
     private suspend fun readLoop(client: Socket) {
         socket = client
         val input = DataInputStream(client.getInputStream().buffered())
         val out = DataOutputStream(client.getOutputStream().buffered())
         output = out
+        startWatchdog()
 
         try {
             while (currentCoroutineContext().isActive) {
                 val frame = TransferProtocol.readFrame(input) ?: break
+                // 收到任何一帧都算链路活着（文本、分片、结束帧、续传应答都算）
+                touchIo()
                 when (frame.type) {
                     TransferProtocol.TYPE_TEXT -> {
                         val text = frame.asText()
@@ -419,6 +488,7 @@ object TransferManager {
         } catch (e: Exception) {
             emit(State.ERROR, "连接异常：${e.message}")
         } finally {
+            stopWatchdog()
             abortReceive()
             output = null
             socket = null
@@ -732,6 +802,9 @@ object TransferManager {
                         digest.update(buffer, 0, read)
                         val readStart = position
                         position += read
+                        // 每读一片就喂一次看门狗：真的卡住时（write 阻塞）循环停在写里面，
+                        // 这个时间戳就不再前进，看门狗才能发现并掐断
+                        touchIo()
 
                         // 落在断点之前的那部分只算 MD5、不发送
                         val skip = (startOffset - readStart).coerceIn(0L, read.toLong()).toInt()
@@ -842,6 +915,8 @@ object TransferManager {
 
     private fun startService(title: String, progress: Int, max: Int) {
         val ctx = appContext ?: return
+        // 新的一次传输：把通知节流重置，让第一条进度立刻显示出来
+        notifyLimiter.reset()
         if (serviceStarted) {
             TransferService.update(ctx, title, "", progress, max)
         } else {
@@ -853,9 +928,11 @@ object TransferManager {
 
     private fun updateService(text: String, progress: Int, max: Int) {
         val ctx = appContext ?: return
-        if (serviceStarted) {
-            TransferService.update(ctx, getServiceTitle(), text, progress, max)
-        }
+        if (!serviceStarted) return
+        // 每个分片都会调进来，这里按 [NOTIFY_THROTTLE_MS] 节流，
+        // 否则 10MB/s 就是每秒上百次 startService 跨进程往返
+        if (!notifyLimiter.tryAcquire()) return
+        TransferService.update(ctx, getServiceTitle(), text, progress, max)
     }
 
     private fun getServiceTitle(): String = "正在传输文件"
@@ -889,8 +966,26 @@ object TransferManager {
     /** 进度回调节流：64KB 分片在局域网里可以到每秒上千帧，不节流会把主线程刷爆 */
     private const val PROGRESS_THROTTLE_MS = 80L
 
+    /**
+     * 通知更新节流。
+     *
+     * 收 / 发每处理一个 64KB 分片都会走到 [updateService]，而它底层是一次
+     * `startService(Intent)`——10MB/s 时等于每秒上百次跨进程调用，通知栏还会跟着抖。
+     * 进度条本身是系统画的，一秒钟刷两次肉眼看不出差别，所以这里卡到 450ms。
+     */
+    private const val NOTIFY_THROTTLE_MS = 450L
+
     /** 等续传应答的超时：超时就从头传，绝不能因为对端没应答而卡住 */
     private const val RESUME_WAIT_MS = 600L
+
+    /**
+     * 断连判定：传输中超过这么久没有任何字节流动，就当链路已经死了。
+     *
+     * 只看「真的在传」的那段时间——空闲挂着的连接可以一直连着聊天，
+     * 不能用 socket 读超时一刀切（那会把正常空闲误判成断线）。
+     */
+    private const val LINK_IDLE_TIMEOUT_MS = 30_000L
+    private const val LINK_WATCHDOG_INTERVAL_MS = 2_000L
 
     private const val MAX_HISTORY = 200
 
