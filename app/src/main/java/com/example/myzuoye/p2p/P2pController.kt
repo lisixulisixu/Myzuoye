@@ -11,6 +11,9 @@ import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
+import android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceInfo
+import android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceRequest
+import android.net.wifi.p2p.nsd.WifiP2pServiceInfo
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -203,6 +206,7 @@ class P2pController(context: Context) {
         connectFallback = null
         networkPollRunnable?.let { mainHandler.removeCallbacks(it) }
         networkPollRunnable = null
+        stopShakeService()
         unbindP2pNetwork()
         stop()
         // Channel.close() 是 API 27 才有的；更老的系统直接放弃关闭（进程退出时系统回收）
@@ -259,6 +263,21 @@ class P2pController(context: Context) {
         val (mgr, ch) = requireChannel() ?: return
         discovering = false
         runCatching { mgr.stopPeerDiscovery(ch, null) }
+    }
+
+    /**
+     * 拉一次设备列表并把结果直接交给 [onResult]。
+     *
+     * 和 [requestPeers] 的区别：结果不走 [onPeersChanged] 广播路径，
+     * 供「连接前确认目标在系统缓存里」这类一次性查询用。
+     */
+    fun requestPeersOnce(onResult: (List<WifiP2pDevice>) -> Unit) {
+        val (mgr, ch) = requireChannel() ?: return
+        runCatching {
+            mgr.requestPeers(ch) { peers ->
+                onResult(peers?.deviceList?.toList().orEmpty())
+            }
+        }
     }
 
     /** 主动刷新一次设备列表 */
@@ -397,6 +416,181 @@ class P2pController(context: Context) {
             begin()
         }
     }
+
+    // ---------------------------------------------------------------- 摇一摇配对（服务发现）
+
+    /**
+     * 发现了对端的摇一摇广播。
+     *
+     * 参数是对端广播的服务实例名（里面装着口令与标识），以及系统给出的对端设备对象。
+     * 设备对象可能为 null（个别 ROM 的服务发现回调不带它），此时无法由本机发起连接，
+     * 只能等对端来邀。
+     */
+    var onShakeServiceFound: ((String, WifiP2pDevice?) -> Unit)? = null
+
+    /** 已发布出去的摇一摇本地服务（停止时要按原对象移除） */
+    private var shakeLocalService: WifiP2pServiceInfo? = null
+
+    /** 已注册的摇一摇服务查询（停止时要按原对象移除） */
+    private var shakeServiceRequest: WifiP2pDnsSdServiceRequest? = null
+
+    /** 服务查询的重试任务（停止时要取消） */
+    private var shakeRediscover: Runnable? = null
+
+    /** 广播中的实例名；非 null 表示摇一摇窗口还开着，重试循环靠它续命 */
+    private var shakeInstance: String? = null
+
+    /**
+     * 广播「我也在摇」，并开始找别人摇的广播。
+     *
+     * 为什么用服务发现而不是 UDP 广播：组网之前两台设备之间根本没有 IP 通路，
+     * 而 Wi-Fi Direct 的服务发现（DNS-SD）正好是官方提供、能在组网前交换一小段文本的通道——
+     * 实例名（instance）会原样送到对端，正好用来装口令。
+     *
+     * 整个过程都是尽力而为：ROM 不支持时只记日志，不影响原有的「搜索 → 点设备」流程。
+     */
+    fun startShakeService(instance: String) {
+        val (mgr, ch) = requireChannel() ?: return
+
+        // 监听器挂在 channel 上，设一次即可；重复设也没副作用
+        runCatching {
+            mgr.setDnsSdResponseListeners(
+                ch,
+                { serviceInstance, _, source ->
+                    onShakeServiceFound?.invoke(serviceInstance, source)
+                },
+                { _, _, _ -> Unit }
+            )
+        }.onFailure { log("注册服务发现监听失败：${it.message}") }
+
+        // 只移除上一次的本地服务/查询对象，**不能**调 clearServiceRequests：
+        // 它是异步的，紧接着注册的查询会被这次清空顺手抹掉——现象是
+        // «discoverServices 返回成功，但永远收不到对端响应»。
+        stopShakeService(quiet = true, clearAll = false)
+
+        shakeInstance = instance
+        val info = runCatching {
+            WifiP2pDnsSdServiceInfo.newInstance(instance, ShakeToken.SERVICE_TYPE, emptyMap())
+        }.getOrNull()
+        if (info == null) {
+            log("摇一摇广播参数无效：$instance")
+            return
+        }
+        shakeLocalService = info
+        shakeRediscover?.let { mainHandler.removeCallbacks(it) }
+        shakeRediscover = null
+
+        runCatching {
+            mgr.addLocalService(ch, info, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    log("摇一摇：已广播口令（$instance）")
+                    registerShakeRequest(first = true)
+                }
+
+                override fun onFailure(reason: Int) {
+                    log("摇一摇广播失败：${reasonText(reason)}")
+                }
+            })
+        }.onFailure { log("摇一摇广播异常：${it.message}") }
+    }
+
+    /** 注册服务查询并发起发现；[first] 为 false 表示是窗口内的自动重试 */
+    private fun registerShakeRequest(first: Boolean) {
+        if (shakeInstance == null) return
+        val (mgr, ch) = requireChannel() ?: return
+
+        val req = runCatching {
+            WifiP2pDnsSdServiceRequest.newInstance(ShakeToken.SERVICE_TYPE)
+        }.getOrNull()
+        if (req == null) {
+            log("摇一摇查询创建失败")
+            return
+        }
+        shakeServiceRequest = req
+
+        runCatching {
+            mgr.addServiceRequest(ch, req, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() = runShakeDiscovery(first)
+                override fun onFailure(reason: Int) {
+                    log("摇一摇查询注册失败：${reasonText(reason)}")
+                }
+            })
+        }.onFailure { log("摇一摇查询注册异常：${it.message}") }
+    }
+
+    private fun runShakeDiscovery(first: Boolean) {
+        if (shakeInstance == null) return
+        val (mgr, ch) = requireChannel() ?: return
+        runCatching {
+            mgr.discoverServices(ch, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    if (first) {
+                        log("摇一摇：已开始寻找同样在摇的手机")
+                        scheduleShakeRediscover(mgr, ch)
+                    }
+                }
+
+                override fun onFailure(reason: Int) {
+                    if (first) {
+                        log("摇一摇服务发现失败：${reasonText(reason)}")
+                        scheduleShakeRediscover(mgr, ch)
+                    }
+                }
+            })
+        }.onFailure {
+            log("摇一摇服务发现异常：${it.message}")
+            if (first) scheduleShakeRediscover(mgr, ch)
+        }
+    }
+
+    /**
+     * 重复发起服务查询。
+     *
+     * 实测（Android 17 模拟器）：第一次 discoverServices 经常返回成功却收不到任何响应，
+     * 隔一两秒再来一次就能收到。窗口由界面控制，界面会在配对结束/退出时调
+     * [stopShakeService]，这里看到广播已被收掉就自己停。
+     */
+    private fun scheduleShakeRediscover(mgr: WifiP2pManager, ch: WifiP2pManager.Channel) {
+        shakeRediscover?.let { mainHandler.removeCallbacks(it) }
+        val next = Runnable {
+            shakeRediscover = null
+            if (shakeInstance == null) return@Runnable
+            // 重新走一遍「注册查询 + 发起发现」：上一轮的查询经常已经失效
+            registerShakeRequest(first = false)
+        }
+        shakeRediscover = next
+        mainHandler.postDelayed(next, SHAKE_REDISCOVER_INTERVAL_MS)
+    }
+
+    /** 撤掉摇一摇广播与查询。配对成功、超时、界面退出都要调，避免在系统里留垃圾 */
+    fun stopShakeService(quiet: Boolean = false, clearAll: Boolean = true) {
+        shakeInstance = null
+        shakeRediscover?.let { mainHandler.removeCallbacks(it) }
+        shakeRediscover = null
+
+        val mgr = manager
+        val ch = channel
+        val info = shakeLocalService
+        val req = shakeServiceRequest
+        shakeLocalService = null
+        shakeServiceRequest = null
+
+        if (mgr == null || ch == null) return
+
+        if (info != null) {
+            runCatching { mgr.removeLocalService(ch, info, null) }
+        }
+        if (req != null) {
+            runCatching { mgr.removeServiceRequest(ch, req, null) }
+        }
+        if (clearAll) {
+            runCatching { mgr.clearServiceRequests(ch, null) }
+        }
+        if (!quiet && (info != null || req != null)) {
+            log("摇一摇：已停止广播")
+        }
+    }
+
 
     /** 自己建组，本机成为组主（GO），适合“我是接收端”的场景 */
     fun createGroup() {
@@ -622,6 +816,10 @@ class P2pController(context: Context) {
 
         /** 轮询 P2P 网络注册的间隔 */
         const val NETWORK_POLL_INTERVAL_MS = 150L
+
+        /** 窗口内重复发起服务查询的间隔 */
+        const val SHAKE_REDISCOVER_INTERVAL_MS = 1_800L
+
 
         /** Wi-Fi Direct 组网固定使用的网段前缀 */
         const val P2P_SUBNET_PREFIX = "192.168.49."

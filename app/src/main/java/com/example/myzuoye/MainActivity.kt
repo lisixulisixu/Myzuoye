@@ -10,6 +10,10 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Uri
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pInfo
 import android.os.Build
@@ -45,6 +49,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.example.myzuoye.net.ChannelTargets
 import com.example.myzuoye.net.LanAddress
 import com.example.myzuoye.p2p.P2pController
+import com.example.myzuoye.p2p.ShakeToken
 import com.example.myzuoye.transfer.ChatEntry
 import com.example.myzuoye.transfer.PartialStore
 import com.example.myzuoye.transfer.QrImage
@@ -69,6 +74,7 @@ import com.example.myzuoye.ui.MascotView
 import com.example.myzuoye.ui.RadarScanView
 import com.example.myzuoye.ui.TransferProgressView
 import com.example.myzuoye.util.AppPermissions
+import com.example.myzuoye.util.ShakeDetector
 import com.example.myzuoye.util.Formatters
 import com.example.myzuoye.weather.WeatherRepository
 import com.example.myzuoye.widget.TransferWidgetProvider
@@ -219,6 +225,37 @@ class MainActivity : AppCompatActivity() {
 
     /** 是否正在发起连接（协商中），此时不要自动续搜，否则会打断 GO 协商 */
     private var connecting = false
+
+    /** 摇一摇：加速度计与识别器 */
+    private var sensorManager: SensorManager? = null
+    private var shakeListening = false
+    private val shakeDetector = ShakeDetector()
+
+    /** 摇一摇窗口的截止时刻（elapsedRealtime），0 表示当前没在配对 */
+    private var shakeUntil = 0L
+
+    /** 本次摇一摇的口令与自身标识 */
+    private var shakeToken = 0L
+    private var shakeSelfId = ""
+
+    /** 已经因为摇一摇「配对成功」了，避免重复庆祝（对面可能连报几次广播） */
+    private var shakeMatched = false
+
+    /** 摇一摇配对上之后延迟发起的连接（收服务发现和 connect 抢状态机，得错开） */
+    private var shakeInvite: Runnable? = null
+
+    /** 加速度计回调。抖动识别交给 [ShakeDetector]，这里只负责切到主线程的业务 */
+    private val shakeListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            val detected = shakeDetector.feed(
+                event.values[0], event.values[1], event.values[2],
+                SystemClock.elapsedRealtime()
+            )
+            if (detected) beginShakePairing()
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+    }
 
     private val uiHandler = Handler(Looper.getMainLooper())
 
@@ -483,6 +520,8 @@ class MainActivity : AppCompatActivity() {
         renderChat()
         renderChannelState(TransferManager.state, "")
 
+        startShakeListening()
+
         if (!controller.isSupported) return
 
         controller.start()
@@ -510,6 +549,10 @@ class MainActivity : AppCompatActivity() {
         // 连接还在就交给前台服务保活：桌面上的「敲一敲」、对方发来的文本
         // 都依赖这条通道活着，进程一被回收就全断了
         TransferManager.setBackgroundKeepAlive(true)
+        stopShakeListening()
+        endShakePairing()
+        shakeInvite?.let { uiHandler.removeCallbacks(it) }
+        shakeInvite = null
         uiHandler.removeCallbacks(discoveryLoop)
         controller.stop()
         TransferManager.onStateChanged = null
@@ -528,6 +571,10 @@ class MainActivity : AppCompatActivity() {
         uiHandler.removeCallbacks(connectingTimeout)
         uiHandler.removeCallbacks(hintHide)
         uiHandler.removeCallbacks(channelErrorHint)
+        uiHandler.removeCallbacks(shakeTimeout)
+        uiHandler.removeCallbacks(shakeNudge)
+        shakeInvite?.let { uiHandler.removeCallbacks(it) }
+        shakeInvite = null
         controller.release()
         // 只有真正退出界面才断开通道，旋转屏幕时保持连接
         if (isFinishing) {
@@ -707,6 +754,7 @@ class MainActivity : AppCompatActivity() {
         }
         val items = arrayOf(
             getString(R.string.lan_direct),
+            getString(R.string.tools_shake_pair),
             getString(R.string.qr_show),
             getString(R.string.qr_scan),
             getString(R.string.send_history),
@@ -726,25 +774,26 @@ class MainActivity : AppCompatActivity() {
             .setItems(items) { _, which ->
                 when (which) {
                     0 -> showLanDirectDialog()
-                    1 -> showQrPairDialog()
-                    2 -> pickQrImage.launch(
+                    1 -> beginShakePairing()
+                    2 -> showQrPairDialog()
+                    3 -> pickQrImage.launch(
                         PickVisualMediaRequest(
                             ActivityResultContracts.PickVisualMedia.ImageOnly
                         )
                     )
-                    3 -> showSendHistory()
-                    4 -> showTransferLog()
-                    5 -> {
+                    4 -> showSendHistory()
+                    5 -> showTransferLog()
+                    6 -> {
                         val enabled = !autoCopyEnabled()
                         setAutoCopyEnabled(enabled)
                         showHint(
                             getString(if (enabled) R.string.auto_copy_on else R.string.auto_copy_off)
                         )
                     }
-                    6 -> togglePairCode()
-                    7 -> pinWidgetToHome()
-                    8 -> exportLog()
-                    9 -> showGesturesDialog()
+                    7 -> togglePairCode()
+                    8 -> pinWidgetToHome()
+                    9 -> exportLog()
+                    10 -> showGesturesDialog()
                     else -> {
                         TransferManager.clearHistory()
                         renderChat()
@@ -1202,6 +1251,10 @@ class MainActivity : AppCompatActivity() {
             TransferManager.setP2pNetwork(network)
         }
 
+        controller.onShakeServiceFound = { instance, device ->
+            onShakePeerFound(instance, device)
+        }
+
         controller.onDiscoveryChanged = { discovering ->
             searching = discovering
             if (discovering) tvP2pState.setText(R.string.p2p_state_searching)
@@ -1211,6 +1264,223 @@ class MainActivity : AppCompatActivity() {
             refreshBackgroundField()
         }
     }
+
+    // ------------------------------------------------------------ 摇一摇配对
+
+    /**
+     * 摇一摇配对。
+     *
+     * 做什么：摇一下 → 把自己的「口令」通过 Wi-Fi Direct 服务发现广播出去，
+     * 同时找别人广播的口令；口令对得上（说明两边几乎同时摇的）就算配对成功，
+     * 由标识较大的一台发起连接，另一台等邀请。
+     *
+     * 为什么这么设计：
+     * - 组网之前两台设备没有 IP 通路，服务发现的实例名是唯一能带自定义文本的官方通道；
+     * - 口令按 1.2 秒分桶、允许相邻桶，两边各自摇自己的，不需要对表也不需要联网；
+     * - 一个人摇不会连上任何东西 —— 没有对端的口令，本机什么也不做。
+     */
+    private fun beginShakePairing() {
+        if (isFinishing || !requestPermissionIfNeeded()) return
+        if (!controller.isSupported) return
+        if (p2pConnected) {
+            showHint(getString(R.string.shake_pair_connected))
+            return
+        }
+        if (connecting) {
+            log("正在连接中，摇一摇先等一等")
+            return
+        }
+        val now = SystemClock.elapsedRealtime()
+        // 已经在配对窗口里就不重复触发：摇得越猛，广播越不该反复重建
+        if (now < shakeUntil) return
+
+        shakeUntil = now + SHAKE_WINDOW_MS
+        shakeMatched = false
+        shakeToken = ShakeToken.token(System.currentTimeMillis())
+        if (shakeSelfId.isEmpty()) shakeSelfId = ShakeToken.deviceId(deviceRawId())
+        val instance = ShakeToken.instance(shakeToken, shakeSelfId)
+        controller.startShakeService(instance)
+
+        flowBackground.burst()
+        mascot.setMood(MascotView.MOOD_HAPPY)
+        mascot.say(getString(R.string.shake_pair_say))
+        tvP2pState.hapticSuccess()
+        showHint(getString(R.string.shake_pair_searching))
+        log("摇一摇配对：口令 $shakeToken，等待同样在摇的手机…")
+
+        uiHandler.removeCallbacks(shakeTimeout)
+        uiHandler.postDelayed(shakeTimeout, SHAKE_WINDOW_MS)
+        uiHandler.removeCallbacks(shakeNudge)
+        uiHandler.postDelayed(shakeNudge, SHAKE_NUDGE_MS)
+    }
+
+    /**
+     * 配对窗口过半还没消息时的一句话。
+     *
+     * 服务发现在模拟器上经常要十秒才回来，光看「配对中」很容易以为卡死了；
+     * 这里只是补充提示，不改变窗口，也不影响后面的匹配。
+     */
+    private val shakeNudge = Runnable {
+        if (shakeMatched || shakeUntil == 0L) return@Runnable
+        showHint(getString(R.string.shake_pair_nudge))
+    }
+
+    /** 听到某个对端的摇一摇广播。口令匹配才继续，其余一律忽略 */
+    private fun onShakePeerFound(instance: String, device: WifiP2pDevice?) {
+        val parsed = ShakeToken.parse(instance) ?: return
+        val (peerToken, peerId) = parsed
+        // 自己广播的回声（部分 ROM 会把本地服务也报上来）
+        if (peerId == shakeSelfId) return
+        // 我们没在摇：对方在摇，但按约定要两边都摇才算配对
+        if (shakeUntil == 0L) return
+        if (!ShakeToken.matches(shakeToken, peerToken)) {
+            log("摇一摇：听到一个口令不匹配的广播，忽略")
+            return
+        }
+        if (shakeMatched) return
+        shakeMatched = true
+
+        uiHandler.removeCallbacks(shakeTimeout)
+        uiHandler.removeCallbacks(shakeNudge)
+        shakeUntil = 0L
+        // 先把服务发现收掉：它和 connect 会抢系统的 P2P 状态机
+        controller.stopShakeService()
+
+        flowBackground.burst()
+        mascot.setMood(MascotView.MOOD_HAPPY)
+        mascot.say(getString(R.string.shake_pair_matched_say))
+        tvP2pState.hapticSuccess()
+        showHint(getString(R.string.shake_pair_matched), HintKind.SUCCESS)
+        log("摇一摇配对成功：口令 $peerToken")
+        // 第二波冲击波晚一点，像两颗心撞上之后的余震
+        uiHandler.postDelayed({ flowBackground.burst(0xFF60A5FA.toInt()) }, 420L)
+
+        if (device == null) {
+            log("没拿到对端设备信息，等对方来邀")
+            return
+        }
+
+        // 收掉服务发现后系统还要一小会儿才回到空闲，立刻 connect 常常被判 BUSY，
+        // 表现就是「配对成功了但一直连不上」。所以先错开 600ms 再发。
+        val inviter = ShakeToken.shouldInvite(shakeSelfId, peerId)
+        val delay = if (inviter) SHAKE_CONNECT_DELAY_MS else SHAKE_WAIT_BEFORE_RETRY_MS
+        log(
+            if (inviter) "由本机发起连接（${displayName(device)}）"
+            else "等对方发起连接…"
+        )
+        shakeInvite?.let { uiHandler.removeCallbacks(it) }
+        var attempt = 0
+        val task = object : Runnable {
+            override fun run() {
+                shakeInvite = null
+                if (p2pConnected) return
+                if (connecting) {
+                    // 上一次还在协商：稍后再看，别硬挤
+                    shakeInvite = this
+                    uiHandler.postDelayed(this, SHAKE_INVITE_RETRY_MS)
+                    return
+                }
+                if (attempt == 0) {
+                    log(if (inviter) "开始发起连接" else "等对方发起连接…")
+                } else {
+                    log(
+                        if (inviter) "对方还没接上，再邀请一次（第 ${attempt + 1} 次）"
+                        else "对方还没动静，这次由本机试一下"
+                    )
+                }
+                connectShakePeer(device)
+
+                // 对端可能正忙着做服务发现（此时它收不到邀请），
+                // 所以邀请要隔几秒重来一次，直到对面腾出手来。
+                attempt++
+                if (attempt < SHAKE_INVITE_TRIES) {
+                    shakeInvite = this
+                    uiHandler.postDelayed(this, SHAKE_INVITE_RETRY_MS)
+                }
+            }
+        }
+        shakeInvite = task
+        uiHandler.postDelayed(task, delay)
+    }
+
+    /**
+     * 摇一摇配对成功后的连接。
+     *
+     * 服务发现回调给的设备对象**不一定在系统的设备缓存里**——直接 connect 会被
+     * 系统当「未知设备」丢弃，日志里是「连接失败：内部错误」。所以先拉一次设备列表：
+     * 对方在就用列表里的对象连；不在就短暂开一次搜索把缓存填上，再试几次。
+     */
+    private fun connectShakePeer(target: WifiP2pDevice, attempt: Int = 0) {
+        if (p2pConnected) return
+        // 每次都补一发搜索：服务发现期间系统的设备搜索是停着的，
+        // 缓存里没有对方的话 connect 会被直接丢弃（Dropping connect request）
+        controller.startDiscovery()
+        controller.requestPeersOnce { peers ->
+            if (p2pConnected || connecting) return@requestPeersOnce
+            val found = peers.firstOrNull {
+                it.deviceAddress.equals(target.deviceAddress, ignoreCase = true)
+            }
+            if (found != null) {
+                onDeviceClicked(found)
+            } else if (attempt >= SHAKE_PEER_WAIT_TRIES) {
+                log("设备列表一直没刷出对方，改用服务发现给的信息直接连")
+                onDeviceClicked(target)
+            } else {
+                log("等系统刷新出对方再连（第 ${attempt + 1} 次）")
+                uiHandler.postDelayed({ connectShakePeer(target, attempt + 1) }, SHAKE_PEER_WAIT_MS)
+            }
+        }
+    }
+
+    private val shakeTimeout = Runnable {
+        if (shakeMatched || shakeUntil == 0L) return@Runnable
+        uiHandler.removeCallbacks(shakeNudge)
+        endShakePairing()
+        mascot.setMood(MascotView.MOOD_IDLE)
+        mascot.say(getString(R.string.shake_pair_say))
+        showHint(getString(R.string.shake_pair_timeout))
+        log("摇一摇：窗口结束，没找到同样在摇的手机")
+    }
+
+    private fun endShakePairing() {
+        shakeUntil = 0L
+        uiHandler.removeCallbacks(shakeTimeout)
+        uiHandler.removeCallbacks(shakeNudge)
+        controller.stopShakeService()
+    }
+
+    /**
+     * 开始听加速度计。
+     *
+     * 只在界面可见时听：摇一摇是个「当面」动作，退到后台还监听纯属浪费电。
+     */
+    private fun startShakeListening() {
+        if (shakeListening) return
+        val mgr = getSystemService(SensorManager::class.java) ?: return
+        val sensor = mgr.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        if (sensor == null) {
+            log("本机没有加速度计，摇一摇不可用（可用右上角菜单手动触发）")
+            return
+        }
+        sensorManager = mgr
+        shakeDetector.reset()
+        runCatching {
+            mgr.registerListener(shakeListener, sensor, SensorManager.SENSOR_DELAY_GAME)
+        }.onSuccess { shakeListening = true }
+            .onFailure { log("加速度计注册失败：${it.message}") }
+    }
+
+    private fun stopShakeListening() {
+        if (!shakeListening) return
+        runCatching { sensorManager?.unregisterListener(shakeListener) }
+        shakeListening = false
+        shakeDetector.reset()
+    }
+
+    /** ANDROID_ID：同一台设备稳定、不同设备不同，用来生成摇一摇的标识 */
+    private fun deviceRawId(): String? = runCatching {
+        Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+    }.getOrNull()
 
     // ------------------------------------------------------------------ 权限
 
@@ -1384,6 +1654,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun onConnected(info: WifiP2pInfo) {
         p2pConnected = true
+        shakeInvite?.let { uiHandler.removeCallbacks(it) }
+        shakeInvite = null
         connecting = false
         uiHandler.removeCallbacks(connectingTimeout)
         adapter.setConnecting(null)
@@ -2315,6 +2587,31 @@ class MainActivity : AppCompatActivity() {
 
         /** 「要不要给小组件开放大致位置」是否已经问过（只问一次） */
         const val KEY_WEATHER_LOC_ASKED = "weather_location_asked"
+
+        /**
+         * 摇一摇的配对窗口。
+         *
+         * 定 20 秒是因为服务发现的响应可能很慢（模拟器上实测要 11 秒才回来）。
+         * 真机上通常两三秒就配对成功，这 20 秒只是兜底，不会真的等满。
+         */
+        const val SHAKE_WINDOW_MS = 20_000L
+
+        /** 窗口过半时补一句提示，避免「一直在配对中」看起来像卡死 */
+        const val SHAKE_NUDGE_MS = 8_000L
+
+        /** 配对成功后延迟多久再发起连接：让系统从服务发现里收尾，否则 connect 会被判忙 */
+        const val SHAKE_CONNECT_DELAY_MS = 1_200L
+
+        /** 等待方等多久还没被邀就连过去：只是兜底，正常路径上根本走不到 */
+        const val SHAKE_WAIT_BEFORE_RETRY_MS = 4_500L
+
+        /** 等系统把对方刷进设备缓存的间隔与次数（连接前必须让对方「可连接」） */
+        const val SHAKE_PEER_WAIT_MS = 1_500L
+        const val SHAKE_PEER_WAIT_TRIES = 6
+
+        /** 邀请重试间隔与次数：对端在服务发现期间收不到邀请，只能隔一会儿再来 */
+        const val SHAKE_INVITE_RETRY_MS = 1_200L
+        const val SHAKE_INVITE_TRIES = 14
 
         /** 通道报错后等这么久再提示：留出「自动重试成功」的窗口，避免刚连上就喊失败 */
         const val CHANNEL_ERROR_SETTLE_MS = 1800L

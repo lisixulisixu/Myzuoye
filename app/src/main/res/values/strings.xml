@@ -105,6 +105,7 @@
     <string name="log_collapse">收起</string>
     <string name="tools_desc">更多操作</string>
     <string name="tools_title">更多操作</string>
+    <string name="tools_shake_pair">摇一摇配对</string>
     <string name="tools_pin_widget">把小组件放到桌面</string>
     <string name="tools_pin_widget_unsupported">当前系统不支持从应用内添加，请在桌面长按空白处 → 小组件</string>
     <string name="tools_gestures">手势与快捷操作说明</string>
@@ -240,6 +241,14 @@
     <string name="widget_status_knocked">咚～ 已敲对方</string>
     <string name="widget_status_knock_failed">还没连上，敲不到</string>
     <string name="knock_received">咚！对方敲了你一下</string>
+    <!-- 摇一摇配对：把「开始」变成两个人一起做的动作 -->
+    <string name="shake_pair_say">一起摇一下！</string>
+    <string name="shake_pair_searching">摇一摇配对中——让对方的手机也摇一下</string>
+    <string name="shake_pair_matched">配对成功！两台手机摇到一起了</string>
+    <string name="shake_pair_matched_say">对上啦！</string>
+    <string name="shake_pair_nudge">还没听到回应——确认对方的手机也摇一下，并且两台都停在这一页</string>
+    <string name="shake_pair_timeout">没听到一起摇的手机，可以再摇一次，或直接点列表里的设备</string>
+    <string name="shake_pair_connected">已经连上了，不用再摇啦</string>
     <!-- 连接期间的后台保活通知：退到桌面也不掉线，桌面敲一敲才有意义 -->
     <string name="keepalive_title">连接保持中</string>
     <string name="keepalive_text">回到应用继续聊天；桌面上也能敲对方一下</string>
