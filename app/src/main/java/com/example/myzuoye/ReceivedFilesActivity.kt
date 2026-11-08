@@ -17,6 +17,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.example.myzuoye.transfer.ReceivedFileStore
 import com.example.myzuoye.ui.AppDialog
 import com.example.myzuoye.ui.ReceivedFileAdapter
+import com.example.myzuoye.ui.attachScrollDepth
 
 /**
  * 应用内查看「下载/WiFi直传」目录下已接收的文件。
@@ -58,6 +59,8 @@ class ReceivedFilesActivity : AppCompatActivity() {
         )
         rvFiles.layoutManager = LinearLayoutManager(this)
         rvFiles.adapter = adapter
+        // 滚动时条目按距中心的远近轻微缩放：列表看起来有纵深，而不是一张平铺的纸
+        rvFiles.attachScrollDepth()
 
         findViewById<View>(R.id.btnFilesBack).setOnClickListener { finish() }
 

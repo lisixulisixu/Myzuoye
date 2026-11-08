@@ -1,9 +1,14 @@
 package com.example.myzuoye.ui
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.os.Build
+import android.provider.Settings
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import kotlin.math.sin
 
 /**
  * 给按钮加「按下缩放 + 轻触觉」反馈。
@@ -48,5 +53,43 @@ fun View.hapticError() {
         performHapticFeedback(HapticFeedbackConstants.REJECT)
     } else {
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+    }
+}
+
+/**
+ * 出错时的横向抖动：正弦衰减，左右各晃三下就停。
+ *
+ * 只改 translationX，不动 layout 参数，所以不会触发重新测量，也不会改变点击区域。
+ * 「错」这件事用位移表达比只把文字变红有效得多——余光里也能看见，
+ * 而且和 hapticError() 搭配起来是「看见 + 摸到」的同一件事。
+ *
+ * 系统关掉动画时直接返回：一帧静止的偏移看起来就像布局错位。
+ */
+fun View.shake(amplitudeDp: Float = 6f) {
+    val animationsOff = runCatching {
+        Settings.Global.getFloat(
+            context.contentResolver,
+            Settings.Global.ANIMATOR_DURATION_SCALE,
+            1f
+        ) == 0f
+    }.getOrDefault(false)
+    if (animationsOff) return
+
+    val amplitude = amplitudeDp * resources.displayMetrics.density
+    animate().cancel()
+    translationX = 0f
+    ValueAnimator.ofFloat(0f, 1f).apply {
+        duration = 280L
+        addUpdateListener { animator ->
+            val t = animator.animatedValue as Float
+            // sin(3πt) 在 0..1 内正好三次来回，再乘 (1-t) 让幅度逐渐收住
+            translationX = (sin(t * 3.0 * Math.PI) * (1.0 - t)).toFloat() * amplitude
+        }
+        addListener(object : AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: Animator) {
+                translationX = 0f
+            }
+        })
+        start()
     }
 }

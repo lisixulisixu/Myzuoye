@@ -58,8 +58,10 @@ import com.example.myzuoye.ui.CoverLiveView
 import com.example.myzuoye.ui.DeviceAdapter
 import com.example.myzuoye.ui.FlowBackgroundView
 import com.example.myzuoye.ui.attachPressFeedback
+import com.example.myzuoye.ui.attachScrollDepth
 import com.example.myzuoye.ui.hapticError
 import com.example.myzuoye.ui.hapticSuccess
+import com.example.myzuoye.ui.shake
 import com.example.myzuoye.ui.MascotView
 import com.example.myzuoye.ui.RadarScanView
 import com.example.myzuoye.ui.TransferProgressView
@@ -298,6 +300,8 @@ class MainActivity : AppCompatActivity() {
         adapter = DeviceAdapter { device -> onDeviceClicked(device) }
         rvDevices.layoutManager = LinearLayoutManager(this)
         rvDevices.adapter = adapter
+        // 设备列表通常只有一两项，纵深效果很淡，但滚动时至少不会「一整块死板地跟着走」
+        rvDevices.attachScrollDepth()
 
         controller = P2pController(this)
         wireController()
@@ -1138,6 +1142,8 @@ class MainActivity : AppCompatActivity() {
             if (discovering) tvP2pState.setText(R.string.p2p_state_searching)
             // 空态可见时同步雷达：搜索开始就转，停下就静止，不靠猜
             radarScan.setScanning(discovering && tvDevicesEmpty.visibility == View.VISIBLE)
+            // 背景也跟着「向外扩散」：整块背景成为搜索状态的一部分，而不是一块死板的底色
+            refreshBackgroundField()
         }
     }
 
@@ -1598,7 +1604,30 @@ class MainActivity : AppCompatActivity() {
         steps.setProgress(step, failed)
     }
 
+    /**
+     * 背景状态只从这一处推导。
+     *
+     * 之前是各个回调各自调用，搜索、连接、传输三条线会互相覆盖——比如连上之后再
+     * 补一次搜索就会把「传输中」的流动背景顶掉。统一收口后优先级是：
+     * 传输中 > 搜索中 > 待机（正在传数据是用户最需要看见的事）。
+     */
+    private fun refreshBackgroundField() {
+        val target = when {
+            TransferManager.isSending || TransferManager.isReceiving ->
+                FlowBackgroundView.Field.TRANSFERRING
+
+            searching -> FlowBackgroundView.Field.SEARCHING
+            else -> FlowBackgroundView.Field.IDLE
+        }
+        flowBackground.setField(target)
+        // 离开传输后把亮度复位，否则下一次光晕会从「快满格」开始
+        if (target != FlowBackgroundView.Field.TRANSFERRING) {
+            flowBackground.setTransferIntensity(1f)
+        }
+    }
+
     private fun renderChannelState(state: TransferManager.State, message: String) {
+        val previous = channelState
         channelState = state
         if (message.isNotBlank()) log(message)
 
@@ -1638,10 +1667,22 @@ class MainActivity : AppCompatActivity() {
             TransferManager.State.ERROR -> {
                 coverLive.setMood(CoverLiveView.MOOD_ERROR)
                 flowBackground.setAccent(COLOR_ACCENT_ERROR, 0.22f)
+                // 首次进入错误态时抖一下状态行：只变红太容易被忽略
+                if (previous != TransferManager.State.ERROR) {
+                    tvChannelState.shake()
+                    window.decorView.hapticError()
+                }
                 if (p2pConnected) {
                     showHint(getString(R.string.channel_error_p2p_ok), HintKind.ERROR)
                 }
             }
+        }
+
+        // 连接状态变了，背景的表现也要跟着换（从「向外扩散」回到「缓慢漂浮」）
+        refreshBackgroundField()
+        // 连上的那一刻播一次冲击波：这是整条流程里第一个「成了」的节点
+        if (state == TransferManager.State.CONNECTED && previous != TransferManager.State.CONNECTED) {
+            flowBackground.burst(COLOR_ACCENT_ONLINE)
         }
 
         // 四步进度统一由权威状态推导（见 refreshSteps 的说明）
@@ -1944,6 +1985,9 @@ class MainActivity : AppCompatActivity() {
         }
         coverLive.setMood(CoverLiveView.MOOD_TRANSFER)
         flowBackground.setAccent(COLOR_ACCENT_TRANSFER, 0.26f)
+        // 背景切到「单向流动」，光晕亮度跟着进度走
+        flowBackground.setTransferIntensity(progress)
+        refreshBackgroundField()
         val suffix = speedSuffix(speed, TransferManager.receivingTotalBytes, progress)
         tvTransferState.text = if (suffix.isEmpty()) {
             getString(R.string.transfer_receiving, name, percent)
@@ -1964,12 +2008,16 @@ class MainActivity : AppCompatActivity() {
             coverLive.celebrate()
             pbTransfer.celebrate()
             window.decorView.hapticSuccess()
+            // 第四件：背景推出一圈冲击波，把「完成」从三个提示变成一个事件
+            flowBackground.burst(COLOR_ACCENT_ONLINE)
+            refreshBackgroundField()
             showHint("已接收：${File(path).name}", HintKind.SUCCESS)
         } else {
             tvTransferState.text = getString(R.string.transfer_received_fail)
             coverLive.setMood(CoverLiveView.MOOD_ERROR)
             flowBackground.setAccent(COLOR_ACCENT_ERROR, 0.22f)
             window.decorView.hapticError()
+            tvTransferState.shake()
             showHint(getString(R.string.transfer_received_fail), HintKind.ERROR)
         }
         updateTransferUi()
@@ -1981,6 +2029,8 @@ class MainActivity : AppCompatActivity() {
         pbTransfer.setBusy(true)
         coverLive.setMood(CoverLiveView.MOOD_TRANSFER)
         flowBackground.setAccent(COLOR_ACCENT_TRANSFER, 0.26f)
+        flowBackground.setTransferIntensity(progress)
+        refreshBackgroundField()
         val suffix = speedSuffix(speed, TransferManager.sendingTotalBytes, progress)
         tvTransferState.text = if (suffix.isEmpty()) {
             getString(R.string.transfer_sending, pendingName, percent)
@@ -2039,6 +2089,8 @@ class MainActivity : AppCompatActivity() {
                 coverLive.celebrate()
                 pbTransfer.celebrate()
                 window.decorView.hapticSuccess()
+                flowBackground.burst(COLOR_ACCENT_ONLINE)
+                refreshBackgroundField()
                 // 队列里还有文件时不弹提示，避免连续发送时提示条一直闪
                 if (sendQueue.pendingCount == 0) {
                     showHint(getString(R.string.transfer_sent_done, pendingName), HintKind.SUCCESS)
@@ -2050,6 +2102,7 @@ class MainActivity : AppCompatActivity() {
                 coverLive.setMood(CoverLiveView.MOOD_ERROR)
                 flowBackground.setAccent(COLOR_ACCENT_ERROR, 0.22f)
                 window.decorView.hapticError()
+                tvTransferState.shake()
                 showHint(getString(R.string.transfer_sent_fail), HintKind.ERROR)
             }
         }
