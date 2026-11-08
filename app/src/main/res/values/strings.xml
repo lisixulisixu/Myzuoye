@@ -5,7 +5,7 @@
     <string name="p2p_state_init">Wi-Fi Direct 初始化中…</string>
     <string name="p2p_state_ready">Wi-Fi Direct 已就绪</string>
     <string name="p2p_state_off">Wi-Fi 已关闭，请先打开 Wi-Fi</string>
-    <string name="p2p_state_no_permission">未授予“附近设备”权限</string>
+    <string name="p2p_state_no_permission">未授予“附近设备 / 本地网络”权限</string>
     <string name="p2p_state_unsupported">本机不支持 Wi-Fi Direct</string>
     <string name="p2p_state_searching">正在搜索附近设备…</string>
     <string name="p2p_state_connecting">正在连接…</string>
@@ -70,8 +70,8 @@
     <string name="log_export_done">日志已导出</string>
     <string name="log_export_failed">日志导出失败</string>
 
-    <string name="dialog_permission_title">需要“附近设备”权限</string>
-    <string name="dialog_permission_message">搜索和连接附近设备依赖“附近设备”权限，请到系统设置中手动开启后返回本页。</string>
+    <string name="dialog_permission_title">需要“附近设备 / 本地网络”权限</string>
+    <string name="dialog_permission_message">搜索附近设备依赖“附近设备”权限；建立传输通道还依赖“本地网络”权限（Android 16 起新增，缺了它连上了也传不动数据）。请到系统设置中手动开启后返回本页。</string>
     <string name="action_go_settings">去设置</string>
 
     <!-- M4：前台服务通知 -->

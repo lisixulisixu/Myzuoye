@@ -40,6 +40,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.children
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.example.myzuoye.net.ChannelTargets
 import com.example.myzuoye.net.LanAddress
 import com.example.myzuoye.p2p.P2pController
 import com.example.myzuoye.transfer.ChatEntry
@@ -65,6 +66,7 @@ import com.example.myzuoye.ui.shake
 import com.example.myzuoye.ui.MascotView
 import com.example.myzuoye.ui.RadarScanView
 import com.example.myzuoye.ui.TransferProgressView
+import com.example.myzuoye.util.AppPermissions
 import com.example.myzuoye.util.Formatters
 import com.example.myzuoye.weather.WeatherRepository
 import com.example.myzuoye.widget.TransferWidgetProvider
@@ -510,6 +512,7 @@ class MainActivity : AppCompatActivity() {
         // 界面已销毁，任何延迟任务都不该再跑（比如退出时的协商超时回调）
         uiHandler.removeCallbacks(connectingTimeout)
         uiHandler.removeCallbacks(hintHide)
+        uiHandler.removeCallbacks(channelErrorHint)
         controller.release()
         // 只有真正退出界面才断开通道，旋转屏幕时保持连接
         if (isFinishing) {
@@ -632,6 +635,20 @@ class MainActivity : AppCompatActivity() {
     // ------------------------------------------------------------------ 内联提示
 
     private enum class HintKind { INFO, SUCCESS, ERROR }
+
+    /**
+     * 通道报错后的「稳定确认」。
+     *
+     * 组网刚完成时可能前一次连接尝试失败、后一次成功，立刻提示会误导用户。
+     * 这个任务延后执行，届时状态仍是错误才真正提示，并且一次会话只提示一次。
+     */
+    private val channelErrorHint = Runnable {
+        if (channelState != TransferManager.State.ERROR) return@Runnable
+        if (p2pHintShown) return@Runnable
+        p2pHintShown = true
+        log(getString(R.string.p2p_failed_hint))
+        showHint(getString(R.string.channel_error_p2p_ok), HintKind.ERROR)
+    }
 
     private val hintHide = Runnable {
         tvHint.animate().alpha(0f).translationY(10f * resources.displayMetrics.density)
@@ -1151,26 +1168,18 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Wi-Fi Direct 在实机上必需的运行时权限，按系统版本分裂：
+     * - Android 16（API 36）起：额外要 ACCESS_LOCAL_NETWORK。
+     *   它是本地网络访问的总开关：没有它，发往局域网 / Wi-Fi Direct 段 / 模拟器宿主的
+     *   连接会被系统静默丢包。缺了它的典型现象就是「组网成功、ping 通、TCP 一定超时」，
+     *   在模拟器上尤其明显（一直只能用 adb forward 绕过）。
      * - Android 13（API 33）起：NEARBY_WIFI_DEVICES（neverForLocation，不需要定位）
      * - Android 12 及以下：仍然是 ACCESS_FINE_LOCATION，且系统定位开关必须打开
      *
      * 早前只判断 NEARBY_WIFI_DEVICES，在 Android 7~12 上该权限并不存在，
      * checkSelfPermission 恒返回拒绝，导致老系统手机直接卡在“无权限”、搜不到设备。
      */
-    private fun requiredPermissions(): Array<String> = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
-            arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
-
-        // Android 10~12：搜索仍需定位权限，但写下载目录不再需要存储权限
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ->
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-
-        // Android 9 及以下：额外需要存储权限，否则文件存不进公共下载目录
-        else -> arrayOf(
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.WRITE_EXTERNAL_STORAGE
-        )
-    }
+    private fun requiredPermissions(): Array<String> =
+        AppPermissions.required().toTypedArray()
 
     private fun hasNearbyPermission(): Boolean = requiredPermissions().all {
         ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
@@ -1351,16 +1360,25 @@ class MainActivity : AppCompatActivity() {
         // M2：组网完成后拉起 TCP 通道。
         // 但必须先把这个进程绑到 P2P 网络 —— Android 10+ 的默认网络路由表里
         // 没有 192.168.49.0/24，不绑定的话 TCP 包会从 Wi-Fi/数据网卡发出去直接超时。
+        //
+        // 模拟器同样走这条路：两台模拟器的 p2p 网卡确实通（ping 得通），
+        // 卡住的地方是 Android 16+ 缺 ACCESS_LOCAL_NETWORK（系统把本地地址的 SYN
+        // 静默丢掉），补上权限后不需要任何 adb forward 就能连上。
         controller.prepareP2pNetwork {
             if (info.isGroupOwner) {
                 TransferManager.startServer()
             } else {
-                val host = info.groupOwnerAddress?.hostAddress
-                if (host.isNullOrBlank()) {
-                    log("组主地址未知，无法建立文本通道")
-                } else {
-                    TransferManager.connect(host)
-                }
+                // 组主地址固定是 192.168.49.1；个别 ROM 的 groupOwnerAddress 会给出空值
+                // 或 0.0.0.0，以前这种情况直接放弃。现在把两个候选都试一遍。
+                val targets = ChannelTargets.forGroupOwner(
+                    reportedHost = info.groupOwnerAddress?.hostAddress,
+                    port = TransferManager.port
+                )
+                log("正在建立文本通道：" + targets.joinToString(" / ") { "${it.first}:${it.second}" })
+                TransferManager.connectTo(
+                    targets = targets.map { TransferManager.Endpoint(it.first, it.second) },
+                    attemptsPerTarget = 8
+                )
             }
         }
     }
@@ -1371,12 +1389,10 @@ class MainActivity : AppCompatActivity() {
      * 文本通道调试菜单（长按通道状态触发）。
      *
      * 用途：不依赖 Wi-Fi Direct，直接在本机起监听或连一个地址。
-     * 两个模拟器上配合 `adb forward` 即可完整验证文本通道与文件传输：
-     * ```
-     * # A 机点“仅本地监听”
-     * adb -s emulator-5554 forward tcp:18988 tcp:8988
-     * # B 机点“手动连接”，输入 10.0.2.2:18988
-     * ```
+     *
+     * 模拟器上现在**不需要**它——补齐「本地网络」权限后，组网成功即自动建连。
+     * 保留这个入口是为了排查传输层本身：真机 P2P 出问题时，可以绕过 Wi-Fi Direct，
+     * 两台设备连同一个 Wi-Fi 后手动互连（或用 `adb forward` 做跨模拟器中转）。
      */
     private fun showChannelDebugMenu() {
         val items = arrayOf(
@@ -1631,6 +1647,10 @@ class MainActivity : AppCompatActivity() {
         channelState = state
         if (message.isNotBlank()) log(message)
 
+        if (state != TransferManager.State.ERROR) {
+            uiHandler.removeCallbacks(channelErrorHint)
+        }
+
         tvChannelState.setText(
             when (state) {
                 TransferManager.State.IDLE -> R.string.channel_idle
@@ -1672,8 +1692,12 @@ class MainActivity : AppCompatActivity() {
                     tvChannelState.shake()
                     window.decorView.hapticError()
                 }
+                // 通道失败提示不要立刻弹：组网刚完成时会同时有多次连接尝试，
+                // 前一次失败、后一次成功是常态，抢着提示会变成「刚连上就说连接失败」。
+                // 等一会儿再看，错误还在才提示。
                 if (p2pConnected) {
-                    showHint(getString(R.string.channel_error_p2p_ok), HintKind.ERROR)
+                    uiHandler.removeCallbacks(channelErrorHint)
+                    uiHandler.postDelayed(channelErrorHint, CHANNEL_ERROR_SETTLE_MS)
                 }
             }
         }
@@ -1699,11 +1723,6 @@ class MainActivity : AppCompatActivity() {
             enqueueFiles(uris)
         }
 
-        // 连接失败时告诉用户还有一条路可走，只提示一次，免得反复刷屏
-        if (state == TransferManager.State.ERROR && !p2pHintShown) {
-            p2pHintShown = true
-            log(getString(R.string.p2p_failed_hint))
-        }
     }
 
     private fun renderChat() {
@@ -2249,8 +2268,12 @@ class MainActivity : AppCompatActivity() {
         /** 「要不要给小组件开放大致位置」是否已经问过（只问一次） */
         const val KEY_WEATHER_LOC_ASKED = "weather_location_asked"
 
+        /** 通道报错后等这么久再提示：留出「自动重试成功」的窗口，避免刚连上就喊失败 */
+        const val CHANNEL_ERROR_SETTLE_MS = 1800L
+
         /** 手动点“搜索设备”的最小间隔，压得太短会频繁触发系统 BUSY */
         const val DISCOVER_DEBOUNCE_MS = 600L
+
 
         /** 自动续搜的检查间隔：系统搜索会自动停止，停了就靠这个把它拉起来 */
         const val DISCOVERY_KEEPALIVE_MS = 6000L

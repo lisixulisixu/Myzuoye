@@ -13,6 +13,14 @@
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="tiramisu" />
+    <!--
+      Android 16（API 36）起新增「本地网络访问」运行时权限：
+      没有它，应用对局域网 / Wi-Fi Direct / 模拟器宿主等本地地址的 TCP 连接会被
+      系统直接丢包（表现为「Wi-Fi Direct 组网成功、ping 通，但 TCP 一定超时」）。
+      低版本系统不认识这个权限，会忽略，不影响安装。
+    -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK"
+        tools:targetApi="36" />
     <!-- Android 9 及以下写公共「下载」目录需要；10 起改用 MediaStore，无需此权限 -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />

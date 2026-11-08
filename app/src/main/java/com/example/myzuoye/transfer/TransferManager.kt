@@ -415,56 +415,108 @@ object TransferManager {
         attempts: Int = 16,
         auto: Boolean = false,
         timeoutMs: Int = CONNECT_TIMEOUT_MS
+    ) = connectTo(
+        targets = listOf(Endpoint(host, port)),
+        attemptsPerTarget = attempts,
+        auto = auto,
+        timeoutMs = timeoutMs
+    )
+
+    /**
+     * 按顺序尝试一组候选地址，直到某一个连上为止。
+     *
+     * 用途：组主地址在个别 ROM 上可能报不出来（空值或 0.0.0.0），
+     * 除了系统给的地址，还要把固定地址 192.168.49.1 一起试（见
+     * [com.example.myzuoye.net.ChannelTargets]）。真机多数只有一个候选，
+     * 行为与原来的 [connect] 完全一致——`rounds = 1`，不会多绕一圈。
+     *
+     * [rounds] 是给「对端还没开始监听」留的等待窗口：整轮走完没连上，
+     * 歇一会儿再来一轮。
+     */
+    fun connectTo(
+        targets: List<Endpoint>,
+        attemptsPerTarget: Int = 16,
+        auto: Boolean = false,
+        timeoutMs: Int = CONNECT_TIMEOUT_MS,
+        rounds: Int = 1,
+        roundDelayMs: Long = 0L
     ) {
+        if (targets.isEmpty()) return
         if (state == State.CONNECTED) return
+
+        // 已有一条连接在尝试中就直接返回。
+        //
+        // 这里**不能**改成「取消旧任务再重来」：协程的取消只对挂起点生效，
+        // 而连接/收发的 socket 调用都是阻塞 IO —— 旧任务不会被打断，它会继续把
+        // 连接建起来，于是同一时刻存在两条 socket，互相踩成
+        // `Software caused connection abort`。宁可让后一次请求空转，
+        // 也不能出现双连接（上一次组网的旧尝试会自然超时退场）。
         if (connectJob?.isActive == true) return
 
         // 用户自己发起的连接重新给一次自动重连额度；
         // 自动重连自身不能再重置，否则「连上就被踢」会变成无限重连
         if (!auto) autoReconnectUsed = false
 
-        this.port = port
+        this.port = targets.first().port
         connectJob = scope.launch {
             var lastError: Exception? = null
-            repeat(attempts) { index ->
-                // 每次重试都刷状态太吵，只在首次和每 4 次时更新
-                if (index == 0 || index % 4 == 0) {
-                    emit(State.CONNECTING, "正在连接 $host:$port（第 ${index + 1} 次）")
-                }
-                try {
-                    val client = Socket()
-                    bindToP2pNetwork(client)
-                    client.connect(InetSocketAddress(host, port), timeoutMs)
+            var lastTarget = targets.first()
 
-                    // 报到：把本机记得的配对码带上。组主开了校验而码不对，
-                    // 它会立刻回一个拒绝帧并把连接关掉，走 [readLoop] 里的处理。
-                    runCatching {
-                        val hello = DataOutputStream(client.getOutputStream())
-                        TransferProtocol.writeHello(hello, clientPairCode)
-                        hello.flush()
+            for (round in 0 until rounds) {
+                if (round > 0 && roundDelayMs > 0) delay(roundDelayMs)
+                for (target in targets) {
+                    lastTarget = target
+                    for (index in 0 until attemptsPerTarget) {
+                        // 每次重试都刷状态太吵，只在首次和每 4 次时更新
+                        if (index == 0 || index % 4 == 0) {
+                            emit(
+                                State.CONNECTING,
+                                "正在连接 ${target.host}:${target.port}（第 ${index + 1} 次）"
+                            )
+                        }
+                        try {
+                            val client = Socket()
+                            bindToP2pNetwork(client)
+                            client.connect(
+                                InetSocketAddress(target.host, target.port),
+                                timeoutMs
+                            )
+
+                            // 报到：把本机记得的配对码带上。组主开了校验而码不对，
+                            // 它会立刻回一个拒绝帧并把连接关掉，走 [readLoop] 里的处理。
+                            runCatching {
+                                val hello = DataOutputStream(client.getOutputStream())
+                                TransferProtocol.writeHello(hello, clientPairCode)
+                                hello.flush()
+                            }
+
+                            lastHost = target.host
+                            lastPort = target.port
+                            this@TransferManager.port = target.port
+                            // 注意：这里不能重置 autoReconnectUsed。连上就被踢的场景（比如
+                            // 配对码不对）会让「成功 → 断开 → 自动重连」自己转圈，
+                            // 额度只在用户主动发起连接时恢复。
+                            emit(State.CONNECTED, "已连接到 ${target.host}:${target.port}")
+                            readLoop(client)
+                            return@launch
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            lastError = e
+                            delay(retryDelayMs(index))
+                        }
                     }
-
-                    lastHost = host
-                    lastPort = port
-                    // 注意：这里不能重置 autoReconnectUsed。连上就被踢的场景（比如
-                    // 配对码不对）会让「成功 → 断开 → 自动重连」自己转圈，
-                    // 额度只在用户主动发起连接时恢复。
-                    emit(State.CONNECTED, "已连接到 $host:$port")
-                    readLoop(client)
-                    return@launch
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    lastError = e
-                    delay(retryDelayMs(index))
                 }
             }
             emit(
                 State.ERROR,
-                "连接 $host:$port 失败：${lastError?.message ?: "未知原因"}"
+                "连接 ${lastTarget.host}:${lastTarget.port} 失败：${lastError?.message ?: "未知原因"}"
             )
         }
     }
+
+    /** 一个可连接的地址 */
+    data class Endpoint(val host: String, val port: Int)
 
     /** 重试间隔：前几次密一点，后面逐步拉长，兼顾速度与空转开销 */
     private fun retryDelayMs(attempt: Int): Long = when {
