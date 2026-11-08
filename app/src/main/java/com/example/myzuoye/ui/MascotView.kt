@@ -71,6 +71,15 @@ class MascotView @JvmOverloads constructor(
             "连接好像断了…"
         )
 
+        /** 被对方「敲」到时的回应：短促、带点被吓到的语气 */
+        private val KNOCK_LINES = arrayOf(
+            "咚！谁呀？",
+            "哎哟…有人敲门",
+            "在的在的！",
+            "听到啦，咚~",
+            "别敲啦，我来了"
+        )
+
         /** 打字机每字间隔（毫秒）：再快就看不清，再慢会等得烦躁 */
         private const val TYPE_INTERVAL_MS = 30L
     }
@@ -515,5 +524,32 @@ class MascotView @JvmOverloads constructor(
         setTransferring(false)
         setMood(MOOD_ANGRY)
         showBubble(FAIL_LINES.random())
+    }
+
+    /**
+     * 被对方「敲」到：整个人往上弹一下，再说一句。
+     *
+     * 只动 translationY，不碰布局参数——和 [Interactions.shake] 同一个思路，
+     * 不会触发重新测量，也不会移动点击热区。系统关了动画就只说话不弹跳。
+     */
+    fun showKnock() {
+        setMood(MOOD_HAPPY)
+        showBubble(KNOCK_LINES.random())
+        if (animationsOff) return
+
+        animate().cancel()
+        translationY = 0f
+        animate()
+            .translationY(-9f * resources.displayMetrics.density)
+            .setDuration(110L)
+            .setInterpolator(OvershootInterpolator(1.2f))
+            .withEndAction {
+                animate()
+                    .translationY(0f)
+                    .setDuration(260L)
+                    .setInterpolator(OvershootInterpolator(2.4f))
+                    .start()
+            }
+            .start()
     }
 }

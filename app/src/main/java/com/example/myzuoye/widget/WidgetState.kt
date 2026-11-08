@@ -34,6 +34,20 @@ object WidgetState {
     /** 传输方向：S=发送 R=接收。空表示未知（老版本写入的状态） */
     private const val KEY_DIR = "transfer_dir"
 
+    /** 上一次「敲一敲」的时刻（epoch 毫秒，0 表示没敲过） */
+    private const val KEY_KNOCK_AT = "knock_at"
+
+    /** 上一次敲一敲有没有真的发出去（没连上时为 false） */
+    private const val KEY_KNOCK_OK = "knock_ok"
+
+    /**
+     * 敲一敲的反馈窗口。
+     *
+     * 卡片上「咚～ 已敲对方」只是一个即时反馈，不能一直挂着——
+     * 超过这个时间就恢复成正常的连接状态文案。
+     */
+    const val KNOCK_HINT_MS = 2600L
+
     data class Snapshot(
         val connected: Boolean,
         val transferring: Boolean,
@@ -48,7 +62,11 @@ object WidgetState {
         /** 预计剩余秒数，算不出来时为 0 */
         val etaSeconds: Int = 0,
         /** S=发送 R=接收，空=未知 */
-        val direction: String = ""
+        val direction: String = "",
+        /** 上一次敲一敲的时刻（epoch 毫秒），0 表示没敲过 */
+        val knockAt: Long = 0L,
+        /** 上一次敲一敲是否成功送达 */
+        val knockDelivered: Boolean = false
     )
 
     private fun prefs(context: Context) =
@@ -65,8 +83,42 @@ object WidgetState {
             peer = p.getString(KEY_PEER, "").orEmpty(),
             speed = p.getInt(KEY_SPEED, 0),
             etaSeconds = p.getInt(KEY_ETA, 0),
-            direction = p.getString(KEY_DIR, "").orEmpty()
+            direction = p.getString(KEY_DIR, "").orEmpty(),
+            knockAt = p.getLong(KEY_KNOCK_AT, 0L),
+            knockDelivered = p.getBoolean(KEY_KNOCK_OK, false)
         )
+    }
+
+    /**
+     * 现在是否还在「刚敲过」的提示窗口内。
+     *
+     * 纯函数，便于单测：卡片刷新和状态文案都靠它判断，
+     * 时间判断写错的话会出现「一直显示已敲对方」这种很怪的卡片。
+     */
+    fun knockActive(
+        nowMs: Long,
+        knockAt: Long,
+        windowMs: Long = KNOCK_HINT_MS
+    ): Boolean = knockAt > 0L && nowMs >= knockAt && nowMs - knockAt < windowMs
+
+    /**
+     * 记录一次敲一敲。
+     *
+     * [delivered] 为 false 表示当时通道没连上（卡片上会提示「敲不到」），
+     * 这样用户点了一个没反应的按钮时至少知道原因。
+     */
+    fun setKnock(context: Context, delivered: Boolean, at: Long = System.currentTimeMillis()) {
+        prefs(context).edit()
+            .putLong(KEY_KNOCK_AT, at)
+            .putBoolean(KEY_KNOCK_OK, delivered)
+            .apply()
+        TransferWidgetProvider.refresh(context)
+    }
+
+    /** 提示窗口结束，清掉敲一敲的痕迹 */
+    fun clearKnock(context: Context) {
+        prefs(context).edit().remove(KEY_KNOCK_AT).apply()
+        TransferWidgetProvider.refresh(context)
     }
 
     /** P2P / 文本通道是否已连接 */

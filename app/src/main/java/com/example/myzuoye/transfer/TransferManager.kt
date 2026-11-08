@@ -6,6 +6,7 @@ import android.net.Network
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import com.example.myzuoye.R
 import com.example.myzuoye.service.TransferService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -45,6 +46,16 @@ object TransferManager {
     /** 前台服务是否已启动（跟踪状态，避免重复 start） */
     @Volatile
     private var serviceStarted = false
+
+    /**
+     * 是否处于「连接期间的后台保活」。
+     *
+     * 界面退到后台时通道本身不会被主动关掉，但进程一旦被系统回收，
+     * socket 就没了——桌面上的「敲一敲」会敲空，对方发来的消息也收不到。
+     * 所以连接还在时用前台服务顶住，回前台再撤掉。
+     */
+    @Volatile
+    private var backgroundKeepAlive = false
 
     /** 上一次更新前台服务通知的时刻，用于节流（见 [NOTIFY_THROTTLE_MS]） */
     private val notifyLimiter = RateLimiter(NOTIFY_THROTTLE_MS)
@@ -254,6 +265,9 @@ object TransferManager {
     var onStateChanged: ((State, String) -> Unit)? = null
     /** 每条聊天消息的结构化回调（方向 + 时间），界面据此摆气泡 */
     var onMessage: ((ChatEntry) -> Unit)? = null
+
+    /** 收到对端「敲一敲」（主线程）。界面侧据此让 Q 版人物弹一下 */
+    var onKnock: (() -> Unit)? = null
 
     val isConnected: Boolean get() = state == State.CONNECTED
 
@@ -559,6 +573,57 @@ object TransferManager {
         return true
     }
 
+    /**
+     * 敲对方一下。
+     *
+     * 桌面小组件上点一下就走到这里：只发一个空载荷帧，代价接近零，
+     * 不会打断正在进行的文件传输（写帧走同一把写锁，天然串行）。
+     *
+     * @return false 表示通道当前不可用（还没连上）
+     */
+    fun sendKnock(): Boolean {
+        val out = output ?: return false
+        scope.launch {
+            try {
+                synchronized(writeLock) { TransferProtocol.writeKnock(out) }
+                appendAndNotify("咚！你敲了对面一下")
+            } catch (e: Exception) {
+                // 敲一敲失败不值得把整个通道判为错误：连接可能只是刚好断了，
+                // 记一句日志即可，真正的断开会由 readLoop / 看门狗另外处理
+                appendAndNotify("敲一敲没发出去：${e.message}")
+            }
+        }
+        return true
+    }
+
+    /**
+     * 连接期间的后台保活开关（界面在 onStop / onStart 调用）。
+     *
+     * 只在「已连接」时打开：监听中或未连接不需要长期占着通知栏。
+     * 关掉时如果正在传输，服务留给传输自己管，不要误停。
+     */
+    fun setBackgroundKeepAlive(alive: Boolean) {
+        val ctx = appContext
+        if (alive) {
+            if (!isConnected) return
+            backgroundKeepAlive = true
+            if (ctx != null) {
+                TransferService.start(ctx)
+                TransferService.update(
+                    ctx,
+                    ctx.getString(R.string.keepalive_title),
+                    ctx.getString(R.string.keepalive_text)
+                )
+            }
+        } else {
+            if (!backgroundKeepAlive) return
+            backgroundKeepAlive = false
+            if (ctx != null && !sending && receiveTarget == null) {
+                TransferService.stop(ctx)
+            }
+        }
+    }
+
     /** 关闭通道，取消所有任务 */
     fun stop() {
         stopWatchdog()
@@ -690,6 +755,27 @@ object TransferManager {
 
                     // 报到帧：组主没开校验时会收到它，什么都不用做
                     TransferProtocol.TYPE_HELLO -> Unit
+
+                    // 敲一敲：留一条记录（方便事后看时间），再交给界面演一下。
+                    // 界面不在前台就没有人「演」，这时把保活通知改成敲门的提示，
+                    // 否则这一下敲得静悄悄，功能等于没做。
+                    TransferProtocol.TYPE_KNOCK -> {
+                        appendAndNotify("咚！对方敲了你一下")
+                        val handler = onKnock
+                        if (handler != null) {
+                            mainHandler.post { handler() }
+                        } else {
+                            appContext?.let { ctx ->
+                                if (backgroundKeepAlive) {
+                                    TransferService.update(
+                                        ctx,
+                                        ctx.getString(R.string.knock_notif_title),
+                                        ctx.getString(R.string.knock_notif_text)
+                                    )
+                                }
+                            }
+                        }
+                    }
 
                     // 被拒：多半是配对码不对。这里不走「连接异常」，
                     // 而是明确告诉界面去要码，用户输了正确码还能接着连
@@ -1279,6 +1365,11 @@ object TransferManager {
 
     private fun emit(newState: State, message: String) {
         state = newState
+        // 后台保活只服务「还连着」这件事：连接没了就立刻撤，别留一条
+        // 「连接保持中」的通知骗人（后台时界面收不到回调，只能在这里兜）
+        if (newState != State.CONNECTED && backgroundKeepAlive && !sending && receiveTarget == null) {
+            setBackgroundKeepAlive(false)
+        }
         mainHandler.post { onStateChanged?.invoke(newState, message) }
     }
 

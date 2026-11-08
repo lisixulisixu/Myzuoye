@@ -64,6 +64,15 @@ object TransferProtocol {
     const val TYPE_PAIR_REJECT: Byte = 0x08
 
     /**
+     * 「敲一敲」：payload 为空，只是打个招呼。
+     *
+     * 桌面小组件上点一下就会发这一个帧，对端的 Q 版人物会弹一下。
+     * 老版本收到未知帧只会在日志里记一行「收到未知帧类型」，不影响通道，
+     * 所以这个功能不需要升协议版本，也不需要能力协商。
+     */
+    const val TYPE_KNOCK: Byte = 0x09
+
+    /**
      * 当前协议版本，写在文件头的第 1 个字节。
      *
      * - 0：早期版本，文件头带 MD5、结束帧只有字节数
@@ -169,6 +178,11 @@ object TransferProtocol {
         payload[2] = codeBytes.size.toByte()
         System.arraycopy(codeBytes, 0, payload, 3, codeBytes.size)
         writeFrame(out, TYPE_HELLO, payload)
+    }
+
+    /** 敲一敲：空载荷，成本极低，走一次 flush 就到对面 */
+    fun writeKnock(out: DataOutputStream) {
+        writeFrame(out, TYPE_KNOCK, ByteArray(0))
     }
 
     /** 拒绝接入，[reason] 会直接显示在对端界面上 */

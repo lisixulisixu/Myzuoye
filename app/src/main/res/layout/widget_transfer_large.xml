@@ -229,6 +229,21 @@
                 android:text="@string/widget_btn_files"
                 android:textColor="#3C4757"
                 android:textSize="11sp" />
+
+            <!-- 敲一下：只有连上时才有意义，默认藏起来，由 provider 按状态显示 -->
+            <TextView
+                android:id="@+id/widgetBtnKnock"
+                android:layout_width="0dp"
+                android:layout_height="30dp"
+                android:layout_marginStart="6dp"
+                android:layout_weight="1"
+                android:background="@drawable/widget_btn"
+                android:contentDescription="@string/widget_btn_knock_desc"
+                android:gravity="center"
+                android:text="@string/widget_btn_knock"
+                android:textColor="#3C4757"
+                android:textSize="11sp"
+                android:visibility="gone" />
         </LinearLayout>
 
         <!-- 传输中才会出现：整行一个，避免误触到「发送」又叠一层传输 -->

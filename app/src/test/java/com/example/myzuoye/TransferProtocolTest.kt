@@ -36,6 +36,34 @@ class TransferProtocolTest {
         assertEquals("你好 P2P", frame.asText())
     }
 
+    /**
+     * 敲一敲：空载荷帧，走一次 flush 就到对面。
+     *
+     * 这个帧的设计前提是「不打扰通道」——它夹在文本帧中间发出去，
+     * 收发两侧的帧边界都不能错位，所以这里连发三种帧验证顺序与载荷。
+     */
+    @Test
+    fun knockFrameRoundTripBetweenTextFrames() {
+        val buffer = ByteArrayOutputStream()
+        val out = DataOutputStream(buffer)
+        TransferProtocol.writeText(out, "before")
+        TransferProtocol.writeKnock(out)
+        TransferProtocol.writeText(out, "after")
+
+        val input = DataInputStream(ByteArrayInputStream(buffer.toByteArray()))
+
+        val first = TransferProtocol.readFrame(input)!!
+        assertEquals(TransferProtocol.TYPE_TEXT, first.type)
+        assertEquals("before", first.asText())
+
+        val knock = TransferProtocol.readFrame(input)!!
+        assertEquals(TransferProtocol.TYPE_KNOCK, knock.type)
+        assertEquals(0, knock.payload.size)
+
+        val third = TransferProtocol.readFrame(input)!!
+        assertEquals("after", third.asText())
+    }
+
     @Test
     fun multipleFramesAreReadInOrder() {
         val buffer = ByteArrayOutputStream()

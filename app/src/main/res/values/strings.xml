@@ -105,6 +105,8 @@
     <string name="log_collapse">收起</string>
     <string name="tools_desc">更多操作</string>
     <string name="tools_title">更多操作</string>
+    <string name="tools_pin_widget">把小组件放到桌面</string>
+    <string name="tools_pin_widget_unsupported">当前系统不支持从应用内添加，请在桌面长按空白处 → 小组件</string>
     <string name="tools_gestures">手势与快捷操作说明</string>
     <string name="tools_gestures_body">· 点封面右下角的女仆：她会说话，也会换表情\n· 长按「文本通道」：局域网直连、导出日志\n· 长按「玩游戏」：恢复「传输前询问是否玩」\n· 长按底部日志：导出或清空日志\n· 传输中可点「取消」清空发送队列</string>
     <string name="devices_empty_hint">还没有发现设备\n让另一台手机也打开本应用并点「搜索设备」\n连不上时可长按「文本通道」改用局域网直连</string>
@@ -231,6 +233,18 @@
     <string name="widget_btn_scan_desc">扫二维码连接对方</string>
     <string name="widget_btn_pair_desc">显示本机连接码，让对方连过来</string>
     <string name="widget_btn_cancel_desc">中断当前传输</string>
+    <!-- 敲一敲：桌面上戳一下对方，对方的人物会弹一下 -->
+    <string name="widget_btn_knock">敲一下</string>
+    <string name="widget_btn_knock_short">敲</string>
+    <string name="widget_btn_knock_desc">敲一敲对方（需要已连接）</string>
+    <string name="widget_status_knocked">咚～ 已敲对方</string>
+    <string name="widget_status_knock_failed">还没连上，敲不到</string>
+    <string name="knock_received">咚！对方敲了你一下</string>
+    <!-- 连接期间的后台保活通知：退到桌面也不掉线，桌面敲一敲才有意义 -->
+    <string name="keepalive_title">连接保持中</string>
+    <string name="keepalive_text">回到应用继续聊天；桌面上也能敲对方一下</string>
+    <string name="knock_notif_title">咚！有人敲了敲你</string>
+    <string name="knock_notif_text">对方在桌面敲了你一下，点一下回去看看</string>
     <string name="widget_cancel_done">已取消传输</string>
     <string name="widget_cancel_idle">当前没有正在进行的传输</string>
     <string name="widget_addr_unknown">未连 Wi-Fi</string>

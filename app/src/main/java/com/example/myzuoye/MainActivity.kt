@@ -1,8 +1,10 @@
 package com.example.myzuoye
 
 import android.Manifest
+import android.appwidget.AppWidgetManager
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -432,6 +434,12 @@ class MainActivity : AppCompatActivity() {
         }
         // 对端开了配对码校验、我们的码不对：弹框要码
         TransferManager.onPairRejected = { reason -> showPairCodePrompt(reason) }
+        // 被对方「敲一敲」：Q 版人物弹一下，配一句提示和触感
+        TransferManager.onKnock = {
+            mascot.showKnock()
+            showHint(getString(R.string.knock_received), HintKind.SUCCESS)
+            tvChannelState.hapticSuccess()
+        }
         TransferManager.onReceiveProgress = { progress, speed ->
             renderReceiveProgress(progress, speed)
             // 小组件：接收中显示文件名、速度和剩余时间（同一文件的高频回调会被去重）
@@ -465,6 +473,9 @@ class MainActivity : AppCompatActivity() {
             sendQueue.onTransferFinished(ok)
         }
 
+        // 回到前台：把后台保活的通知撤掉（正在传输时服务归传输管，不会被误停）
+        TransferManager.setBackgroundKeepAlive(false)
+
         // 进入界面时对齐一次小组件状态（应用被杀后桌面上的卡片可能是旧的）
         TransferWidgetProvider.refresh(this)
         // 天气：内部按 15 分钟节流，无网/无权限时静默跳过，绝不影响传文件流程
@@ -496,12 +507,16 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStop() {
         super.onStop()
+        // 连接还在就交给前台服务保活：桌面上的「敲一敲」、对方发来的文本
+        // 都依赖这条通道活着，进程一被回收就全断了
+        TransferManager.setBackgroundKeepAlive(true)
         uiHandler.removeCallbacks(discoveryLoop)
         controller.stop()
         TransferManager.onStateChanged = null
         TransferManager.onMessage = null
         TransferManager.clearFileCallbacks()
         TransferManager.onPairRejected = null
+        TransferManager.onKnock = null
         // 界面不可见时关闭游戏窗口，避免 Dialog 引用已销毁的 Activity
         transferGame?.dismiss()
         transferGame = null
@@ -701,6 +716,7 @@ class MainActivity : AppCompatActivity() {
                 getString(if (autoCopyEnabled()) R.string.switch_on else R.string.switch_off)
             ),
             getString(R.string.pair_code, pairLabel),
+            getString(R.string.tools_pin_widget),
             getString(R.string.log_export),
             getString(R.string.tools_gestures),
             getString(R.string.log_clear)
@@ -726,8 +742,9 @@ class MainActivity : AppCompatActivity() {
                         )
                     }
                     6 -> togglePairCode()
-                    7 -> exportLog()
-                    8 -> showGesturesDialog()
+                    7 -> pinWidgetToHome()
+                    8 -> exportLog()
+                    9 -> showGesturesDialog()
                     else -> {
                         TransferManager.clearHistory()
                         renderChat()
@@ -736,6 +753,32 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             .show()
+    }
+
+    /**
+     * 把桌面小组件放到桌面上。
+     *
+     * 系统提供的「请求固定」能力（API 26+）：调一下就会弹一个确认框，
+     * 用户点「添加」小组件就落到桌面。没有这条路径的话，用户只能
+     * 自己长按桌面 → 小组件 → 翻到 W 才能找到它，绝大多数人不会走那么远。
+     */
+    private fun pinWidgetToHome() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            showHint(getString(R.string.tools_pin_widget_unsupported), HintKind.ERROR)
+            return
+        }
+        val manager = getSystemService(AppWidgetManager::class.java)
+        if (manager == null || !manager.isRequestPinAppWidgetSupported) {
+            showHint(getString(R.string.tools_pin_widget_unsupported), HintKind.ERROR)
+            return
+        }
+        val provider = ComponentName(this, TransferWidgetProvider::class.java)
+        val requested = runCatching { manager.requestPinAppWidget(provider, null, null) }
+            .getOrDefault(false)
+        log(
+            if (requested) "已请求把小组件放到桌面"
+            else "系统拒绝了添加小组件的请求"
+        )
     }
 
     /**
@@ -1127,6 +1170,11 @@ class MainActivity : AppCompatActivity() {
             adapter.setConnecting(null)
             refreshSteps()
             TransferManager.setP2pNetwork(null)
+            // 关键：同时清掉 P2pController 里记着的旧网络。
+            // 只解 socket/进程绑定、却留着记录的话，下次组网 prepareP2pNetwork 会因为
+            // 「已经绑过了」直接返回，进程其实绑在**上一个已消失的网络**上——
+            // 新组里的客户端连 192.168.49.1 会一直超时（复现过：第二次组网必失败）。
+            controller.forgetBoundNetwork()
             tvRoleInfo.setText(R.string.role_unknown)
             // 这里不主动关通道：P2P 链路断开时 socket 会自己报错退出，
             // 而组主的监听保留下来，下次重新组网可以直接复用。

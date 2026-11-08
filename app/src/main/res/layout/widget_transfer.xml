@@ -161,6 +161,22 @@
                 android:textColor="#4E5A6C"
                 android:textSize="12sp" />
 
+            <!-- 敲一敲：连通后出现，点一下对方的人物会弹一下 -->
+            <TextView
+                android:id="@+id/widgetKnockBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="20dp"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/widget_btn"
+                android:contentDescription="@string/widget_btn_knock_desc"
+                android:gravity="center"
+                android:paddingStart="7dp"
+                android:paddingEnd="7dp"
+                android:text="@string/widget_btn_knock_short"
+                android:textColor="#3C4757"
+                android:textSize="10sp"
+                android:visibility="gone" />
+
             <TextView
                 android:id="@+id/widgetReceived"
                 android:layout_width="0dp"

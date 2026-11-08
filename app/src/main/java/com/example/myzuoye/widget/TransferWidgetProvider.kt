@@ -7,7 +7,13 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.TypedValue
 import android.view.View
 import android.widget.RemoteViews
@@ -73,6 +79,8 @@ class TransferWidgetProvider : AppWidgetProvider() {
                 refresh(context)
             }
 
+            ACTION_KNOCK -> handleKnock(context)
+
             ACTION_CANCEL_TRANSFER -> {
                 // 用户点了「取消」就一定要离开传输态，所以这里**无条件**清位，再尽力让传输层中止。
                 //
@@ -89,12 +97,67 @@ class TransferWidgetProvider : AppWidgetProvider() {
         }
     }
 
+    /**
+     * 敲一敲。
+     *
+     * 刻意不拉起界面：桌面上戳一下就该有反应，不该整屏跳到 App。
+     * 所以这里直接让传输层发一个空载荷帧，再用震动 + 卡片文案给即时反馈；
+     * 真正的「表演」发生在对方那台设备上（Q 版人物弹一下）。
+     */
+    private fun handleKnock(context: Context) {
+        val app = context.applicationContext
+        // 小组件可能在任何时候被点，进程里未必已经挂过上下文
+        TransferManager.attach(app)
+        val sent = runCatching { TransferManager.sendKnock() }.getOrDefault(false)
+
+        if (sent) vibrateKnock(app)
+        WidgetState.setKnock(app, delivered = sent)
+
+        // 提示只是瞬时的：到点回刷一次，把状态行还原成「已连接 xxx」
+        mainHandler.removeCallbacksAndMessages(null)
+        mainHandler.postDelayed({ WidgetState.clearKnock(app) }, KNOCK_RESET_MS)
+    }
+
+    /** 敲的那一下要有手感：短促单次震动，尊重系统的震动开关（拿不到震动器就静默跳过） */
+    private fun vibrateKnock(context: Context) {
+        runCatching {
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                context.getSystemService(VibratorManager::class.java)?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            } ?: return
+            if (!vibrator.hasVibrator()) return
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createOneShot(28L, 150))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(28L)
+            }
+        }
+    }
+
     companion object {
         /** 点城市行触发的手动刷新 */
         const val ACTION_REFRESH_WEATHER = "com.example.myzuoye.widget.REFRESH_WEATHER"
 
         /** 点「取消传输」触发的中断 */
         const val ACTION_CANCEL_TRANSFER = "com.example.myzuoye.widget.CANCEL_TRANSFER"
+
+        /** 点「敲一敲」：直接发帧给对端，不拉起界面 */
+        const val ACTION_KNOCK = "com.example.myzuoye.widget.KNOCK"
+
+        /** 敲一敲的反馈在卡片上停留的时间，比状态窗口多留 200ms，避免回刷早于过期判断 */
+        private const val KNOCK_RESET_MS = WidgetState.KNOCK_HINT_MS + 200L
+
+        /**
+         * 只用来延迟复位敲一敲的提示，不持有任何组件引用。
+         *
+         * 用 lazy 而不是直接初始化：纯 JVM 单测会直接读 companion 里的卡片尺寸逻辑，
+         * 而 `Looper.getMainLooper()` 在单测环境里是桩实现，构造 Handler 会直接抛异常。
+         */
+        private val mainHandler: Handler by lazy { Handler(Looper.getMainLooper()) }
 
         /** 已连接：绿色 */
         private const val COLOR_ONLINE = 0xFF34C759.toInt()
@@ -226,6 +289,10 @@ class TransferWidgetProvider : AppWidgetProvider() {
             val progress: Int,
             /** 连接状态：决定状态行点击是「进已收文件」还是「显示连接码」 */
             val connected: Boolean,
+            /** 是否刚敲过（卡片状态行会短暂显示反馈） */
+            val knockActive: Boolean,
+            /** 上次敲一敲有没有送达 */
+            val knockDelivered: Boolean,
             val showTitle: Boolean,
             val showCity: Boolean,
             val celestialSizePx: Int,
@@ -259,6 +326,8 @@ class TransferWidgetProvider : AppWidgetProvider() {
             heightDp: Int
         ): Model {
             val snap = WidgetState.snapshot(context)
+            // 「刚敲过」的判断要一个时间基准，整次构建共用一个，避免中途跨过窗口边界
+            val now = System.currentTimeMillis()
             val weather = WeatherRepository.cached(context)
             val density = context.resources.displayMetrics.density
             val widthPx = (widthDp * density).toInt().coerceAtLeast(200)
@@ -320,6 +389,15 @@ class TransferWidgetProvider : AppWidgetProvider() {
                         snap.progress
                     )
                     dotColor = COLOR_TRANSFER
+                }
+
+                // 刚敲过就先报敲的结果：用户点完按钮最想确认的就是「对面收到没」
+                snap.connected && WidgetState.knockActive(now, snap.knockAt) -> {
+                    statusText = context.getString(
+                        if (snap.knockDelivered) R.string.widget_status_knocked
+                        else R.string.widget_status_knock_failed
+                    )
+                    dotColor = COLOR_ONLINE
                 }
 
                 snap.connected -> {
@@ -411,6 +489,8 @@ class TransferWidgetProvider : AppWidgetProvider() {
                 transferring = snap.transferring,
                 progress = snap.progress,
                 connected = snap.connected,
+                knockActive = WidgetState.knockActive(now, snap.knockAt),
+                knockDelivered = snap.knockDelivered,
                 showTitle = !compact,
                 showCity = !compact && heightDp >= 100,
                 celestialSizePx = celestialSizePx,
@@ -523,6 +603,16 @@ class TransferWidgetProvider : AppWidgetProvider() {
 
             setProgress(views, model)
 
+            // 敲一敲：连着才有意义，未连接时藏起来，别给用户一个点了没反应的按钮
+            val canKnock = model.connected && !model.transferring
+            views.setViewVisibility(
+                R.id.widgetKnockBtn,
+                if (canKnock) View.VISIBLE else View.GONE
+            )
+            if (canKnock) {
+                views.setOnClickPendingIntent(R.id.widgetKnockBtn, knockIntent(context))
+            }
+
             // 整张卡片进应用；城市行刷新天气
             views.setOnClickPendingIntent(R.id.widgetRoot, activityIntent(context, 1, null))
             views.setOnClickPendingIntent(R.id.widgetCity, refreshIntent(context))
@@ -624,6 +714,15 @@ class TransferWidgetProvider : AppWidgetProvider() {
                     R.id.widgetBtnFiles,
                     activityIntent(context, 4, ReceivedFilesActivity::class.java)
                 )
+
+                // 敲一敲只占第四个位；未连接时整行回到三按钮，不挤占发送/扫码的空间
+                views.setViewVisibility(
+                    R.id.widgetBtnKnock,
+                    if (model.connected) View.VISIBLE else View.GONE
+                )
+                if (model.connected) {
+                    views.setOnClickPendingIntent(R.id.widgetBtnKnock, knockIntent(context))
+                }
             }
             views.setOnClickPendingIntent(R.id.widgetStatusRow, statusRowIntent(context, model))
             views.setOnClickPendingIntent(R.id.widgetRoot, activityIntent(context, 1, null))
@@ -713,6 +812,19 @@ class TransferWidgetProvider : AppWidgetProvider() {
             } else {
                 activityIntent(context, 9, null, WidgetActions.PAIR)
             }
+
+        /** 敲一敲：发广播回自己，由 [onReceive] 直接发帧（不经过界面） */
+        private fun knockIntent(context: Context): PendingIntent {
+            val intent = Intent(context, TransferWidgetProvider::class.java).apply {
+                action = ACTION_KNOCK
+            }
+            return PendingIntent.getBroadcast(
+                context,
+                11,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        }
 
         /** 传输中的「取消」：发广播回自己，由 [onReceive] 调传输层中断 */
         private fun cancelIntent(context: Context): PendingIntent {
