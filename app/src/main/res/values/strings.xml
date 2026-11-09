@@ -66,6 +66,18 @@
     <string name="queue_cleared">已清空发送队列</string>
     <string name="queue_interrupted">连接中断，剩余 %1$d 个文件等重连后自动续传</string>
     <string name="queue_resumed">连接已恢复，继续发送队列中的文件</string>
+
+    <!-- 传输卡片：把一次传输变成可保存/分享的图 -->
+    <string name="card_title">传输卡片</string>
+    <string name="card_hint">长按图片可保存；「分享」会直接发给别人</string>
+    <string name="card_save">保存</string>
+    <string name="card_share">分享</string>
+    <string name="card_saved">已保存到相册（Pictures/WiFi快传）</string>
+    <string name="card_save_failed">保存失败：存储不可用或没有权限</string>
+    <string name="card_render_failed">卡片生成失败</string>
+    <string name="card_close">关闭</string>
+    <string name="card_empty">还没有传输记录，先传个文件吧</string>
+    <string name="tools_transfer_card">传输卡片（最近一次）</string>
     <string name="share_waiting_connect">已收到 %1$d 个文件，连接设备后会自动发送</string>
     <string name="log_export">导出日志</string>
     <string name="log_clear">清空日志</string>

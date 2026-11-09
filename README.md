@@ -72,6 +72,8 @@ CI：`.github/workflows/android.yml` 在每次 push / PR 时跑单测 + 编译 d
 | `app/src/main/java/com/example/myzuoye/shake/ShakePairing.kt` | 摇一摇配对功能块：加速度计、口令广播、匹配、邀请重试 |
 | `app/src/main/java/com/example/myzuoye/pair/QrPairFlow.kt` | 二维码配对功能块：展示二维码 / 相册扫码 / 配对码重试 |
 | `app/src/main/java/com/example/myzuoye/util/TransferEta.kt` | 传输速度后缀与剩余秒数估算（小组件用） |
+| `app/src/main/java/com/example/myzuoye/ui/TransferCardRenderer.kt` | 传输卡片离屏绘制（1080×1440） |
+| `app/src/main/java/com/example/myzuoye/ui/TransferCardSheet.kt` | 卡片弹窗：预览、保存到相册、FileProvider 分享 |
 | `app/src/main/java/com/example/myzuoye/net/HostPort.kt` | 「地址:端口」文本解析 |
 | `app/src/main/java/com/example/myzuoye/p2p/P2pController.kt` | Wi-Fi Direct 控制层：搜索 / 连接 / 建组 / 取组主地址 |
 | `app/src/main/java/com/example/myzuoye/p2p/WifiDirectReceiver.kt` | 系统广播接收与翻译 |
@@ -163,6 +165,35 @@ P2P 组网完成后自动建立：组主（`192.168.49.1`）作服务端监听 `
 
 文件传输期间，`TransferService` 以前台服务（`FOREGROUND_SERVICE_TYPE_DATA_SYNC`）运行，
 通知栏展示传输进度，切到后台或锁屏也不会被系统回收连接。传输结束自动停止服务。
+
+## 传输卡片
+
+把「一次传输」变成一张可以保存、可以发给别人的图。入口两个：
+
+- **更多操作 → 传输卡片（最近一次）**：给最近一笔传输生成卡片；
+- **更多操作 → 传输历史 → 点任意一条**：给那一笔生成卡片。
+
+卡片内容（`ui/TransferCardRenderer.kt`，1080×1440 离屏 Canvas 绘制）：
+
+| 区域 | 内容 |
+| --- | --- |
+| 顶部 | 应用名 + 完成时间 |
+| 状态 | 「已送达 / 已收到」+ 一句「没有经过任何服务器」 |
+| 文件面板 | 扩展名角标 + 文件名（超宽自动省略）+ 大小 |
+| 数据行 | 用时 / 平均速度 / 方向，三列等分 |
+| 人物 | 左「对方」（呆滞脸贴纸）、右「本机」（开心脸贴纸），中间虚线箭头指向接收方 |
+| 页脚 | WiFi 快传 · 日期 |
+
+卡片的数据来源是 `TransferLog`：这次给每条记录补了 `ms`（用时）与 `peer`（对端设备名），
+所以老记录也能开卡片，只是用时显示「—」、对端显示「对方的手机」。
+
+落地方式（`ui/TransferCardSheet.kt`）：
+
+- **保存**：Android 10+ 走 MediaStore 写 `Pictures/WiFi快传`；更早版本写公共图片目录 + 媒体扫描；
+- **分享**：先写 `files/cards`，再走 FileProvider 授时 `content://`（`file_paths.xml` 已加 `cards/`）。
+
+渲染是可测的：`TransferCardRendererTest` 把发送 / 接收两个方向的样例导出到
+`files/card_preview/`，人工核对排版；断言覆盖尺寸（3:4）、非纯色、文件名格式。
 
 ## 真机验证
 

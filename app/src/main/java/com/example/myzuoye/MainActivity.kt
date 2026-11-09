@@ -67,6 +67,7 @@ import com.example.myzuoye.ui.hapticSuccess
 import com.example.myzuoye.ui.shake
 import com.example.myzuoye.ui.MascotView
 import com.example.myzuoye.ui.RadarScanView
+import com.example.myzuoye.ui.TransferCardSheet
 import com.example.myzuoye.ui.TransferProgressView
 import com.example.myzuoye.util.AppPermissions
 import com.example.myzuoye.util.Formatters
@@ -734,6 +735,7 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.qr_scan),
             getString(R.string.send_history),
             getString(R.string.transfer_log),
+            getString(R.string.tools_transfer_card),
             getString(
                 R.string.auto_copy_toggle,
                 getString(if (autoCopyEnabled()) R.string.switch_on else R.string.switch_off)
@@ -754,17 +756,18 @@ class MainActivity : AppCompatActivity() {
                     3 -> qrPair.launchScan()
                     4 -> showSendHistory()
                     5 -> showTransferLog()
-                    6 -> {
+                    6 -> showLatestTransferCard()
+                    7 -> {
                         val enabled = !autoCopyEnabled()
                         setAutoCopyEnabled(enabled)
                         showHint(
                             getString(if (enabled) R.string.auto_copy_on else R.string.auto_copy_off)
                         )
                     }
-                    7 -> togglePairCode()
-                    8 -> pinWidgetToHome()
-                    9 -> exportLog()
-                    10 -> showGesturesDialog()
+                    8 -> togglePairCode()
+                    9 -> pinWidgetToHome()
+                    10 -> exportLog()
+                    11 -> showGesturesDialog()
                     else -> {
                         TransferManager.clearHistory()
                         renderChat()
@@ -815,19 +818,33 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val fmt = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
-        val items = entries.take(TRANSFER_LOG_SHOWN).map { e ->
+        val shown = entries.take(TRANSFER_LOG_SHOWN)
+        val items = shown.map { e ->
             val arrow = if (e.dir == TransferLog.DIR_SENT) "↑" else "↓"
             "$arrow ${e.name}\n${Formatters.size(e.size)} · ${fmt.format(Date(e.at))}"
         }.toTypedArray()
         AppDialog.builder(this)
             .setTitle(getString(R.string.transfer_log_title, entries.size))
-            .setItems(items, null)
+            .setItems(items) { _, which ->
+                // 点一条记录 → 把那次传输画成卡片（可保存 / 分享）
+                shown.getOrNull(which)?.let { TransferCardSheet.show(this, it) }
+            }
             .setNeutralButton(R.string.transfer_log_clear) { _, _ ->
                 TransferLog.clear(this)
                 toast(getString(R.string.transfer_log_cleared))
             }
             .setNegativeButton(R.string.dialog_ok, null)
             .show()
+    }
+
+    /** 工具菜单入口：给最近一次传输画张卡片 */
+    private fun showLatestTransferCard() {
+        val latest = TransferLog.latest(this)
+        if (latest == null) {
+            showHint(getString(R.string.card_empty))
+            return
+        }
+        TransferCardSheet.show(this, latest)
     }
 
     // ------------------------------------------------------------------ 配对码
@@ -1582,6 +1599,8 @@ class MainActivity : AppCompatActivity() {
                 flowBackground.setAccent(COLOR_ACCENT_ONLINE, 0.18f)
                 if (connectingPeerName.isNotBlank()) {
                     WidgetState.setPeer(this, connectingPeerName)
+                    // 传输记录与卡片要用「跟谁传的」：在这里写入，断开后仍保留上一位对端
+                    TransferManager.peerName = connectingPeerName
                 }
             }
 

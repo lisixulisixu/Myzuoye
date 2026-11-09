@@ -180,6 +180,15 @@ object TransferManager {
     @Volatile
     private var clientPairCode: String = ""
 
+    /**
+     * 当前对端的设备名（界面在连接建立时写入）。
+     *
+     * 只用于记录与展示——传输记录里带上「跟谁传的」，传输卡片上要画这个标签。
+     * 拿不到就留空，卡片会退化成「对方的手机」。
+     */
+    @Volatile
+    var peerName: String = ""
+
     /** 上一次连接的地址，用于「配对码输错后重试」与「意外断连自动重连」 */
     @Volatile
     private var lastHost: String? = null
@@ -251,6 +260,9 @@ object TransferManager {
 
     /** 进度回调节流时间戳：不必每个分片都往主线程抛一次 */
     private var receivePostAt: Long = 0
+
+    /** 本次接收开始的时刻（elapsedRealtime），用于给传输卡片算用时 */
+    private var receiveStartedAt: Long = 0
 
     /** 本次文件因故（头解析失败 / 建文件失败 / 写盘失败）已放弃，后续分片直接丢弃 */
     private var receiveDiscarding = false
@@ -919,6 +931,7 @@ object TransferManager {
         receiveSampleAt = SystemClock.elapsedRealtime()
         receiveSampleBytes = target.resumedFrom
         receivePostAt = 0
+        receiveStartedAt = SystemClock.elapsedRealtime()
 
         // 新客户端发文件头时还没算完 MD5（写的是占位符），真正的值在结束帧里
         receiveMd5 = if (header.md5Known) header.md5Hex else ""
@@ -1065,7 +1078,8 @@ object TransferManager {
                 appContext?.let { ctx ->
                     runCatching {
                         TransferLog.record(
-                            ctx, target.fileName, written, TransferLog.DIR_RECEIVED, actualMd5
+                            ctx, target.fileName, written, TransferLog.DIR_RECEIVED, actualMd5,
+                            ms = receiveDurationMs(), peer = peerName
                         )
                     }
                 }
@@ -1152,6 +1166,14 @@ object TransferManager {
         receiveDiscarding = false
         receivingFileName = ""
         receivingTotalBytes = 0
+        receiveStartedAt = 0
+    }
+
+    /** 本次接收用时（毫秒）；没记到起点时返回 0，卡片就不显示用时 */
+    private fun receiveDurationMs(): Long {
+        val start = receiveStartedAt
+        if (start <= 0L) return 0L
+        return (SystemClock.elapsedRealtime() - start).coerceAtLeast(0L)
     }
 
     // ------------------------------------------------------------------ 文件发送
@@ -1180,6 +1202,8 @@ object TransferManager {
         sending = true
         startService("发送 $fileName", 0, 100)
         sendJob = scope.launch {
+            // 计时给传输卡片用：从本次任务真正开始（含等续传应答）算到发完
+            val startedAt = SystemClock.elapsedRealtime()
             val out = output
             if (out == null) {
                 sending = false
@@ -1297,7 +1321,9 @@ object TransferManager {
                     appContext?.let { ctx ->
                         runCatching {
                             TransferLog.record(
-                                ctx, fileName, knownSize, TransferLog.DIR_SENT, md5
+                                ctx, fileName, knownSize, TransferLog.DIR_SENT, md5,
+                                ms = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L),
+                                peer = peerName
                             )
                         }
                     }

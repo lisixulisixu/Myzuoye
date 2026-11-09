@@ -59,4 +59,34 @@ class TransferLogTest {
         TransferLog.clear(context)
         assertEquals(0, TransferLog.all(context).size)
     }
+
+    @Test
+    fun recordsDurationAndPeerForCard() {
+        TransferLog.record(
+            context, "movie.mp4", 88L, TransferLog.DIR_SENT, "MD9",
+            ms = 2_400L, peer = "P60 Pro"
+        )
+        val e = TransferLog.all(context).first()
+        assertEquals(2_400L, e.ms)
+        assertEquals("P60 Pro", e.peer)
+        // latest() 也要带上，工具菜单的「最近一次卡片」走这条路
+        assertEquals(2_400L, TransferLog.latest(context)?.ms)
+        assertEquals("P60 Pro", TransferLog.latest(context)?.peer)
+    }
+
+    @Test
+    fun oldRecordsWithoutNewFieldsStillReadable() {
+        // 老版本写下的 JSON 没有 ms / peer：读出来应是 0 与空串，不能让解析炸掉
+        context.getSharedPreferences("transfer_log", Context.MODE_PRIVATE)
+            .edit()
+            .putString(
+                "items",
+                """[{"name":"legacy.bin","size":42,"dir":"R","at":1700000000000,"md5":"AB"}]"""
+            )
+            .commit()
+        val e = TransferLog.all(context).first()
+        assertEquals("legacy.bin", e.name)
+        assertEquals(0L, e.ms)
+        assertEquals("", e.peer)
+    }
 }

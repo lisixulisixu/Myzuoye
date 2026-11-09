@@ -32,7 +32,11 @@ object TransferLog {
         val size: Long,
         val dir: String,
         val at: Long,
-        val md5: String
+        val md5: String,
+        /** 传输用时（毫秒）。老记录没存这个字段，读出来是 0 */
+        val ms: Long = 0L,
+        /** 对端设备名（用于传输卡片）。老记录为空 */
+        val peer: String = ""
     )
 
     private fun prefs(context: Context) =
@@ -52,7 +56,9 @@ object TransferLog {
                         size = obj.optLong("size", -1L),
                         dir = obj.optString("dir", DIR_RECEIVED),
                         at = obj.optLong("at", 0L),
-                        md5 = obj.optString("md5")
+                        md5 = obj.optString("md5"),
+                        ms = obj.optLong("ms", 0L),
+                        peer = obj.optString("peer", "")
                     )
                 )
             }
@@ -65,10 +71,14 @@ object TransferLog {
         name: String,
         size: Long,
         dir: String,
-        md5: String = ""
+        md5: String = "",
+        /** 传输用时（毫秒），用于卡片上的「用时 / 平均速度」 */
+        ms: Long = 0L,
+        /** 对端设备名，用于卡片上的人物标签 */
+        peer: String = ""
     ) {
         val updated = buildList {
-            add(Entry(name, size, dir, System.currentTimeMillis(), md5))
+            add(Entry(name, size, dir, System.currentTimeMillis(), md5, ms, peer))
             addAll(all(context))
         }.take(MAX)
 
@@ -81,6 +91,8 @@ object TransferLog {
                     .put("dir", it.dir)
                     .put("at", it.at)
                     .put("md5", it.md5)
+                    .put("ms", it.ms)
+                    .put("peer", it.peer)
             )
         }
         prefs(context).edit().putString(KEY_ITEMS, array.toString()).apply()
@@ -107,7 +119,9 @@ object TransferLog {
             size = obj.optLong("size", -1L),
             dir = obj.optString("dir", DIR_RECEIVED),
             at = obj.optLong("at", 0L),
-            md5 = obj.optString("md5")
+            md5 = obj.optString("md5"),
+            ms = obj.optLong("ms", 0L),
+            peer = obj.optString("peer", "")
         )
     }
 

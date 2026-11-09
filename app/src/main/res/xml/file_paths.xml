@@ -1,10 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  FileProvider 只暴露日志目录。
-  导出诊断日志时用 content:// 分享，避免 API 24+ 的 FileUriExposedException。
+  FileProvider 暴露两个内部目录：
+  - logs/：导出诊断日志时用 content:// 分享；
+  - cards/：分享传输卡片时用 content:// 送图片。
+  都走 FileProvider，避免 API 24+ 的 FileUriExposedException。
 -->
 <paths>
     <files-path
         name="logs"
         path="logs/" />
+    <files-path
+        name="cards"
+        path="cards/" />
 </paths>
