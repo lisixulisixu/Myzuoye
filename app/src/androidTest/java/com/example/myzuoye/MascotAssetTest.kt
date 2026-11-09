@@ -14,7 +14,7 @@ import java.io.File
 /**
  * 表情贴纸资源验收：能解码、是方的、四角干净（生成图上的水印痕迹要被抹掉）。
  *
- * 顺带把九张拼成一张对照表导出，方便人工看「风格是不是一家人」。
+ * 顺带把十张拼成一张对照表导出，方便人工看「风格是不是一家人」。
  */
 @RunWith(AndroidJUnit4::class)
 class MascotAssetTest {

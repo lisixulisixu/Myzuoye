@@ -28,7 +28,8 @@ object MascotGallery {
         MascotView.MOOD_SMUG to "得意",
         MascotView.MOOD_SLEEPY to "困了",
         MascotView.MOOD_SAD to "委屈",
-        MascotView.MOOD_ANGRY to "生气"
+        MascotView.MOOD_ANGRY to "生气",
+        MascotView.MOOD_SHUSH to "嘘"
     )
 
     fun show(activity: Activity) {

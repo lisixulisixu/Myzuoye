@@ -35,6 +35,7 @@ import kotlin.math.sin
  * - [MOOD_SMUG]      得意（戳出来的）
  * - [MOOD_SAD]       委屈（戳出来的）
  * - [MOOD_CHEER]     欢呼（传输完成）
+ * - [MOOD_SHUSH]     嘘（戳出来的；照片贴纸，画风和其他贴纸不同，故意留着）
  *
  * 气泡排版（[layoutBubble]）：
  * 气泡画在人物上方的独立区域，宽度受控件宽度限制。文字先按宽度自动折行，
@@ -57,6 +58,7 @@ class MascotView @JvmOverloads constructor(
         const val MOOD_SMUG = 6
         const val MOOD_SAD = 7
         const val MOOD_CHEER = 8
+        const val MOOD_SHUSH = 9
 
         /** 表情 → 贴纸资源。加新表情只改这一处 */
         fun drawableForMood(mood: Int): Int = when (mood) {
@@ -68,13 +70,14 @@ class MascotView @JvmOverloads constructor(
             MOOD_SMUG -> R.drawable.mascot_smug
             MOOD_SAD -> R.drawable.mascot_sad
             MOOD_CHEER -> R.drawable.mascot_cheer
+            MOOD_SHUSH -> R.drawable.mascot_shush
             else -> R.drawable.mascot_idle
         }
 
         /** 所有表情，供「表情库」预览按顺序展示 */
         val ALL_MOODS = intArrayOf(
             MOOD_IDLE, MOOD_HAPPY, MOOD_CHEER, MOOD_SURPRISED,
-            MOOD_SHY, MOOD_SMUG, MOOD_SLEEPY, MOOD_SAD, MOOD_ANGRY
+            MOOD_SHY, MOOD_SMUG, MOOD_SLEEPY, MOOD_SAD, MOOD_ANGRY, MOOD_SHUSH
         )
 
         /** 气泡字号（dp）与缩放下限 */
@@ -90,7 +93,7 @@ class MascotView @JvmOverloads constructor(
         /** 点击时随机切换的表情：只放「适合被戳」的几个，失败/传输中的表情不参与 */
         private val TAP_MOODS = intArrayOf(
             MOOD_HAPPY, MOOD_CHEER, MOOD_SURPRISED,
-            MOOD_SHY, MOOD_SMUG, MOOD_SLEEPY, MOOD_SAD
+            MOOD_SHY, MOOD_SMUG, MOOD_SLEEPY, MOOD_SAD, MOOD_SHUSH
         )
 
         /** 每种表情对应的戳一戳台词，和表情语义对上，不再随机串味 */
@@ -101,6 +104,7 @@ class MascotView @JvmOverloads constructor(
             MOOD_SMUG -> arrayOf("这点小事难不倒我", "哼哼~", "夸我一下嘛")
             MOOD_SAD -> arrayOf("呜呜…", "有点委屈", "不理你了")
             MOOD_CHEER -> arrayOf("耶！", "今天也超顺利~", "给我点个赞")
+            MOOD_SHUSH -> arrayOf("嘘——", "小声点，文件在传", "看着进度，别吵")
             else -> arrayOf("喵~", "在呢在呢", "戳我干嘛", "加油鸭", "文件传好了吗", "今天也要元气满满")
         }
 

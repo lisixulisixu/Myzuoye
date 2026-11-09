@@ -17,7 +17,8 @@ class MascotMoodTest {
     private val allMoods = listOf(
         MascotView.MOOD_IDLE, MascotView.MOOD_HAPPY, MascotView.MOOD_ANGRY,
         MascotView.MOOD_SURPRISED, MascotView.MOOD_SHY, MascotView.MOOD_SLEEPY,
-        MascotView.MOOD_SMUG, MascotView.MOOD_SAD, MascotView.MOOD_CHEER
+        MascotView.MOOD_SMUG, MascotView.MOOD_SAD, MascotView.MOOD_CHEER,
+        MascotView.MOOD_SHUSH
     )
 
     @Test
