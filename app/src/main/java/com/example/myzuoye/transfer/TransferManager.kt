@@ -180,15 +180,34 @@ object TransferManager {
     @Volatile
     private var clientPairCode: String = ""
 
-    /** 上一次连接的地址，用于「配对码输错后重试」与「意外断连自动重连一次」 */
+    /** 上一次连接的地址，用于「配对码输错后重试」与「意外断连自动重连」 */
     @Volatile
     private var lastHost: String? = null
 
     @Volatile
     private var lastPort: Int = TransferProtocol.PORT
 
-    /** 断连自动重连只用一次，避免来回刷 */
-    private var autoReconnectUsed = false
+    /**
+     * 本轮已用的自动重连次数。
+     *
+     * 之前是一个布尔（只重连一次），Wi-Fi Direct 抖两下额度就用光了；
+     * 现在放宽到 [ReconnectPolicy.MAX_ROUNDS] 轮，具体防打转策略见 [ReconnectPolicy]。
+     * 清零时机：用户主动发起连接、组主接到新接入、或断开前那条连接足够稳定。
+     */
+    private var autoReconnectRounds = 0
+
+    /**
+     * 最近一条连接里本机的角色：true = 客户端。
+     *
+     * 只有客户端能「主动连回去」；组主断开后回到监听等对方重连即可。
+     * 之前没记角色，一台先当过客户端、后来又做组主的设备断线时
+     * 会拿旧地址错误地发起客户端连接，这里从源头堵住。
+     */
+    @Volatile
+    private var lastConnectionWasClient = false
+
+    /** 最近一条连接建立的时刻（elapsedRealtime），算存活时长用 */
+    private var connectionStartedAt = 0L
 
     /** 对端因配对码拒绝时回调（主线程），参数是对方给的原因 */
     var onPairRejected: ((String) -> Unit)? = null
@@ -323,7 +342,9 @@ object TransferManager {
                     if (!verifyPair(client)) continue
 
                     emit(State.CONNECTED, "对方已接入：${client.inetAddress.hostAddress}")
-                    autoReconnectUsed = false
+                    // 组主接到新连接：角色归位，重连额度也重新给满
+                    lastConnectionWasClient = false
+                    autoReconnectRounds = 0
                     readLoop(client)
                     emit(State.LISTENING, "连接已断开，继续等待")
                 }
@@ -467,9 +488,9 @@ object TransferManager {
         // 也不能出现双连接（上一次组网的旧尝试会自然超时退场）。
         if (connectJob?.isActive == true) return
 
-        // 用户自己发起的连接重新给一次自动重连额度；
+        // 用户自己发起的连接重新给满自动重连额度；
         // 自动重连自身不能再重置，否则「连上就被踢」会变成无限重连
-        if (!auto) autoReconnectUsed = false
+        if (!auto) autoReconnectRounds = 0
 
         this.port = targets.first().port
         connectJob = scope.launch {
@@ -507,9 +528,11 @@ object TransferManager {
                             lastHost = target.host
                             lastPort = target.port
                             this@TransferManager.port = target.port
-                            // 注意：这里不能重置 autoReconnectUsed。连上就被踢的场景（比如
-                            // 配对码不对）会让「成功 → 断开 → 自动重连」自己转圈，
-                            // 额度只在用户主动发起连接时恢复。
+                            // 客户端连上了：记下角色，断线时才知道该不该自动重连
+                            lastConnectionWasClient = true
+                            // 注意：这里不能重置 autoReconnectRounds。连上就被踢的场景（比如
+                            // 配对码不对）会让「成功 → 断开 → 自动重连」自己转圈；
+                            // 额度只在用户主动发起连接、组主接到新连接或连接足够稳定时恢复。
                             emit(State.CONNECTED, "已连接到 ${target.host}:${target.port}")
                             readLoop(client)
                             return@launch
@@ -721,6 +744,7 @@ object TransferManager {
 
     private suspend fun readLoop(client: Socket) {
         socket = client
+        connectionStartedAt = SystemClock.elapsedRealtime()
         val input = DataInputStream(client.getInputStream().buffered())
         val out = DataOutputStream(client.getOutputStream().buffered())
         output = out
@@ -815,22 +839,40 @@ object TransferManager {
     }
 
     /**
-     * 自动重连：只做一次，只对客户端角色有效（组主没有「主动连回去」的概念）。
+     * 自动重连：只对客户端角色有效（组主没有「主动连回去」的概念，
+     * 它回到监听等对方重连就行）。
      *
-     * 目的很有限——网络瞬断时把通道接回来，让用户不用手动再点一遍；
+     * 支持多轮，额度与防打转规则见 [ReconnectPolicy]：
+     * 连续快速断线最多 [ReconnectPolicy.MAX_ROUNDS] 轮；
+     * 断开前那条连接如果足够稳定，额度清零重新计。
      * 已经传了一半的文件靠续传机制接着传，这里不碰任何传输状态。
      */
     private fun scheduleAutoReconnect() {
+        // 组主角色：等对方自己重连回来，不该拿旧地址当客户端乱连
+        if (!lastConnectionWasClient) return
         val host = lastHost ?: return
-        if (autoReconnectUsed) return
 
-        autoReconnectUsed = true
-        appendAndNotify("连接意外断开，正在自动重连…")
+        // 连接稳定了很久才断：这次断线算偶发，额度重新给满
+        val duration = SystemClock.elapsedRealtime() - connectionStartedAt
+        if (ReconnectPolicy.shouldResetStreak(duration)) autoReconnectRounds = 0
+
+        if (!ReconnectPolicy.canAttempt(autoReconnectRounds)) {
+            appendAndNotify("自动重连已达 ${ReconnectPolicy.MAX_ROUNDS} 次仍未成功，请手动重新连接")
+            return
+        }
+
+        autoReconnectRounds++
+        appendAndNotify("连接意外断开，正在自动重连（第 $autoReconnectRounds 次）…")
         scope.launch {
             delay(AUTO_RECONNECT_DELAY_MS)
             // 上一轮的 connect 协程可能还挂在 connectJob 上，不清掉会让 connect() 直接 return
             connectJob = null
-            connect(host, lastPort, attempts = 8, auto = true)
+            connect(
+                host,
+                lastPort,
+                attempts = ReconnectPolicy.attemptsForRound(autoReconnectRounds),
+                auto = true
+            )
         }
     }
 

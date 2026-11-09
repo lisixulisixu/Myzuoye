@@ -378,6 +378,9 @@ class MainActivity : AppCompatActivity() {
                     getString(R.string.send_queue_partial, okCount, failCount)
                 }
                 updateTransferUi()
+            },
+            onInterrupted = { remaining ->
+                log(getString(R.string.queue_interrupted, remaining))
             }
         )
 
@@ -395,6 +398,8 @@ class MainActivity : AppCompatActivity() {
         btnDiscover.setOnClickListener { startDiscovery(force = true) }
         btnCreateGroup.setOnClickListener { controller.createGroup() }
         btnDisconnect.setOnClickListener {
+            // 用户主动断开：队列一并清掉，重连后不该自动把旧任务接着发
+            sendQueue.clear()
             controller.disconnect()
             TransferManager.stop()
         }
@@ -2041,6 +2046,15 @@ class MainActivity : AppCompatActivity() {
             pendingShareUris = emptyList()
             log("连接建立，开始发送先前分享进来的 ${uris.size} 个文件")
             enqueueFiles(uris)
+        }
+
+        // 断线中断的发送队列：通道恢复后自动接着发。
+        // 接收端的半成品还在，大文件会走续传握手从断点继续，不会重头再来
+        if (state == TransferManager.State.CONNECTED &&
+            previous != TransferManager.State.CONNECTED &&
+            sendQueue.resumeAfterReconnect()
+        ) {
+            log(getString(R.string.queue_resumed))
         }
 
     }
