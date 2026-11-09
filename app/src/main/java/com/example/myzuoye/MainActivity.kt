@@ -10,10 +10,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Uri
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
 import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pInfo
 import android.os.Build
@@ -35,7 +31,6 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -47,13 +42,13 @@ import androidx.core.view.children
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.myzuoye.net.ChannelTargets
+import com.example.myzuoye.net.HostPort
 import com.example.myzuoye.net.LanAddress
+import com.example.myzuoye.pair.QrPairFlow
 import com.example.myzuoye.p2p.P2pController
-import com.example.myzuoye.p2p.ShakeToken
+import com.example.myzuoye.shake.ShakePairing
 import com.example.myzuoye.transfer.ChatEntry
 import com.example.myzuoye.transfer.PartialStore
-import com.example.myzuoye.transfer.QrImage
-import com.example.myzuoye.transfer.QrPair
 import com.example.myzuoye.transfer.SendHistory
 import com.example.myzuoye.transfer.SendItem
 import com.example.myzuoye.transfer.SendQueue
@@ -74,8 +69,8 @@ import com.example.myzuoye.ui.MascotView
 import com.example.myzuoye.ui.RadarScanView
 import com.example.myzuoye.ui.TransferProgressView
 import com.example.myzuoye.util.AppPermissions
-import com.example.myzuoye.util.ShakeDetector
 import com.example.myzuoye.util.Formatters
+import com.example.myzuoye.util.TransferEta
 import com.example.myzuoye.weather.WeatherRepository
 import com.example.myzuoye.widget.TransferWidgetProvider
 import com.example.myzuoye.widget.WidgetActions
@@ -92,10 +87,10 @@ import java.util.Locale
  */
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var controller: P2pController
+    internal lateinit var controller: P2pController
     private lateinit var adapter: DeviceAdapter
 
-    private lateinit var tvP2pState: TextView
+    internal lateinit var tvP2pState: TextView
     private lateinit var tvSelfInfo: TextView
     private lateinit var tvRoleInfo: TextView
     private lateinit var tvPeerHint: TextView
@@ -117,10 +112,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var coverLive: CoverLiveView
 
     /** 流动背景：连接状态变化时整体染一层状态色 */
-    private lateinit var flowBackground: FlowBackgroundView
+    internal lateinit var flowBackground: FlowBackgroundView
 
     /** 内联提示条（替代 Toast） */
-    private lateinit var tvHint: TextView
+    internal lateinit var tvHint: TextView
     private lateinit var tvLogToggle: TextView
     private lateinit var logHeader: View
 
@@ -146,7 +141,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnCancelTransfer: TextView
 
     /** Q 版人物形象 */
-    private lateinit var mascot: MascotView
+    internal lateinit var mascot: MascotView
 
     /** 待发送的文件信息：uri + 显示名 + 大小。由发送队列在「轮到它」时填充 */
     private var pendingUri: Uri? = null
@@ -221,43 +216,21 @@ class MainActivity : AppCompatActivity() {
     private var discoveryBackoffUntil = 0L
 
     /** P2P 组是否已建立 */
-    private var p2pConnected = false
+    internal var p2pConnected = false
 
     /** 是否正在发起连接（协商中），此时不要自动续搜，否则会打断 GO 协商 */
-    private var connecting = false
+    internal var connecting = false
 
-    /** 摇一摇：加速度计与识别器 */
-    private var sensorManager: SensorManager? = null
-    private var shakeListening = false
-    private val shakeDetector = ShakeDetector()
+    /** 摇一摇配对：独立功能块（加速度计、口令广播、邀请重试）。逻辑见 shake/ShakePairing.kt */
+    internal val shake = ShakePairing(this)
 
-    /** 摇一摇窗口的截止时刻（elapsedRealtime），0 表示当前没在配对 */
-    private var shakeUntil = 0L
+    /**
+     * 二维码配对：独立功能块（展示 / 扫码 / 配对码重试）。逻辑见 pair/QrPairFlow.kt。
+     * 必须在构造期创建：里面的相册选择器要求在 onStart 之前注册。
+     */
+    internal val qrPair = QrPairFlow(this)
 
-    /** 本次摇一摇的口令与自身标识 */
-    private var shakeToken = 0L
-    private var shakeSelfId = ""
-
-    /** 已经因为摇一摇「配对成功」了，避免重复庆祝（对面可能连报几次广播） */
-    private var shakeMatched = false
-
-    /** 摇一摇配对上之后延迟发起的连接（收服务发现和 connect 抢状态机，得错开） */
-    private var shakeInvite: Runnable? = null
-
-    /** 加速度计回调。抖动识别交给 [ShakeDetector]，这里只负责切到主线程的业务 */
-    private val shakeListener = object : SensorEventListener {
-        override fun onSensorChanged(event: SensorEvent) {
-            val detected = shakeDetector.feed(
-                event.values[0], event.values[1], event.values[2],
-                SystemClock.elapsedRealtime()
-            )
-            if (detected) beginShakePairing()
-        }
-
-        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
-    }
-
-    private val uiHandler = Handler(Looper.getMainLooper())
+    internal val uiHandler = Handler(Looper.getMainLooper())
 
     /**
      * 自动续搜。
@@ -475,7 +448,7 @@ class MainActivity : AppCompatActivity() {
             maybeAutoCopy(entry)
         }
         // 对端开了配对码校验、我们的码不对：弹框要码
-        TransferManager.onPairRejected = { reason -> showPairCodePrompt(reason) }
+        TransferManager.onPairRejected = { reason -> qrPair.showPairCodePrompt(reason) }
         // 被对方「敲一敲」：Q 版人物弹一下，配一句提示和触感
         TransferManager.onKnock = {
             mascot.showKnock()
@@ -487,7 +460,7 @@ class MainActivity : AppCompatActivity() {
             // 小组件：接收中显示文件名、速度和剩余时间（同一文件的高频回调会被去重）
             WidgetState.setTransferring(
                 this, true, TransferManager.receivingFileName, (progress * 100).toInt(),
-                speed, etaSeconds(speed, TransferManager.receivingTotalBytes, progress),
+                speed, TransferEta.etaSeconds(speed, TransferManager.receivingTotalBytes, progress),
                 TransferLog.DIR_RECEIVED
             )
         }
@@ -501,7 +474,7 @@ class MainActivity : AppCompatActivity() {
             transferGame?.onProgress(pendingName, progress)
             WidgetState.setTransferring(
                 this, true, pendingName, (progress * 100).toInt(),
-                speed, etaSeconds(speed, TransferManager.sendingTotalBytes, progress),
+                speed, TransferEta.etaSeconds(speed, TransferManager.sendingTotalBytes, progress),
                 TransferLog.DIR_SENT
             )
         }
@@ -525,7 +498,7 @@ class MainActivity : AppCompatActivity() {
         renderChat()
         renderChannelState(TransferManager.state, "")
 
-        startShakeListening()
+        shake.startListening()
 
         if (!controller.isSupported) return
 
@@ -554,10 +527,9 @@ class MainActivity : AppCompatActivity() {
         // 连接还在就交给前台服务保活：桌面上的「敲一敲」、对方发来的文本
         // 都依赖这条通道活着，进程一被回收就全断了
         TransferManager.setBackgroundKeepAlive(true)
-        stopShakeListening()
-        endShakePairing()
-        shakeInvite?.let { uiHandler.removeCallbacks(it) }
-        shakeInvite = null
+        shake.stopListening()
+        shake.end()
+        shake.cancelInvite()
         uiHandler.removeCallbacks(discoveryLoop)
         controller.stop()
         TransferManager.onStateChanged = null
@@ -576,10 +548,8 @@ class MainActivity : AppCompatActivity() {
         uiHandler.removeCallbacks(connectingTimeout)
         uiHandler.removeCallbacks(hintHide)
         uiHandler.removeCallbacks(channelErrorHint)
-        uiHandler.removeCallbacks(shakeTimeout)
-        uiHandler.removeCallbacks(shakeNudge)
-        shakeInvite?.let { uiHandler.removeCallbacks(it) }
-        shakeInvite = null
+        shake.end()
+        shake.cancelInvite()
         controller.release()
         // 只有真正退出界面才断开通道，旋转屏幕时保持连接
         if (isFinishing) {
@@ -701,7 +671,7 @@ class MainActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------------ 内联提示
 
-    private enum class HintKind { INFO, SUCCESS, ERROR }
+    internal enum class HintKind { INFO, SUCCESS, ERROR }
 
     /**
      * 通道报错后的「稳定确认」。
@@ -730,7 +700,7 @@ class MainActivity : AppCompatActivity() {
      * 替换系统 Toast：Toast 飘在屏幕最下方、样式不可控、连续弹出还会排队，
      * 而这里贴着页面显示、带状态配色，连续触发时直接替换文案不会堆积。
      */
-    private fun showHint(message: String, kind: HintKind = HintKind.INFO) {
+    internal fun showHint(message: String, kind: HintKind = HintKind.INFO) {
         if (message.isBlank() || isFinishing) return
         tvHint.text = message
         val tint = when (kind) {
@@ -779,13 +749,9 @@ class MainActivity : AppCompatActivity() {
             .setItems(items) { _, which ->
                 when (which) {
                     0 -> showLanDirectDialog()
-                    1 -> beginShakePairing()
-                    2 -> showQrPairDialog()
-                    3 -> pickQrImage.launch(
-                        PickVisualMediaRequest(
-                            ActivityResultContracts.PickVisualMedia.ImageOnly
-                        )
-                    )
+                    1 -> shake.begin()
+                    2 -> qrPair.showQrDialog()
+                    3 -> qrPair.launchScan()
                     4 -> showSendHistory()
                     5 -> showTransferLog()
                     6 -> {
@@ -908,168 +874,6 @@ class MainActivity : AppCompatActivity() {
      * 内容是「IP:端口 + 配对码（开了才有）」，对端在「更多操作 → 扫码连接」里
      * 选这张图（截图/拍照都行）即可直连并自动完成配对码校验。
      */
-    private fun showQrPairDialog() {
-        if (isFinishing) return
-        val ip = LanAddress.primaryIpv4()
-        if (ip == null) {
-            toast(getString(R.string.qr_no_ip))
-            return
-        }
-        val payload = QrPair.Payload(
-            host = ip,
-            port = TransferManager.port,
-            pairCode = prefs().getString(KEY_PAIR_CODE, null).orEmpty().ifEmpty { null }
-        )
-        val size = (280 * resources.displayMetrics.density).toInt()
-        val qr = runCatching { QrImage.encode(QrPair.encode(payload), size) }.getOrNull()
-        if (qr == null) {
-            toast(getString(R.string.qr_generate_failed))
-            return
-        }
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = android.view.Gravity.CENTER_HORIZONTAL
-            val pad = (24 * resources.displayMetrics.density).toInt()
-            setPadding(pad, pad / 2, pad, 0)
-        }
-        val codeLabel = payload.pairCode
-            ?.let { getString(R.string.qr_pair_code_label, it) }
-            ?: getString(R.string.qr_pair_code_none)
-        container.addView(TextView(this).apply {
-            text = getString(R.string.qr_addr_label, "$ip:${TransferManager.port}") + "\n" + codeLabel
-            textSize = 13f
-            gravity = android.view.Gravity.CENTER
-        })
-        container.addView(android.widget.ImageView(this).apply {
-            setImageBitmap(qr)
-            val m = (12 * resources.displayMetrics.density).toInt()
-            setPadding(0, m, 0, 0)
-            contentDescription = getString(R.string.qr_show)
-        })
-        AppDialog.builder(this)
-            .setTitle(R.string.qr_show)
-            .setView(container)
-            .setPositiveButton(R.string.dialog_ok, null)
-            .show()
-    }
-
-    /**
-     * 从相册选一张二维码图片并连接。
-     *
-     * 用系统照片选择器（Photo Picker）：不需要存储权限，返回的临时 Uri 本应用就能读。
-     * 解码放后台线程——一张大图缩放 + 识别可能上百毫秒，主线程做会卡住过渡动画。
-     */
-    private val pickQrImage =
-        registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-            if (uri == null) return@registerForActivityResult
-            toast(getString(R.string.qr_decoding))
-            Thread {
-                val text = runCatching { decodeQrFromUri(uri) }.getOrNull()
-                if (isFinishing || isDestroyed) return@Thread
-                val payload = text?.let { QrPair.decode(it) }
-                runOnUiThread {
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    when {
-                        text == null -> toast(getString(R.string.qr_not_found))
-                        payload == null -> toast(getString(R.string.qr_not_ours))
-                        else -> connectViaQr(payload)
-                    }
-                }
-            }.start()
-        }
-
-    /**
-     * 读 Uri 并识别二维码。
-     *
-     * 手机拍的照片动辄 4000×3000（ARGB 解码后 48MB），直接 `decodeStream` 在低端机上
-     * 会把进程撑爆。先只读尺寸算采样率，再按上限 [QR_DECODE_MAX_PX] 解码——二维码
-     * 通常只占画面一小块，采到 1400px 仍足够识别，内存降到十几 MB。
-     */
-    private fun decodeQrFromUri(uri: Uri): String? {
-        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        contentResolver.openInputStream(uri)?.use {
-            android.graphics.BitmapFactory.decodeStream(it, null, bounds)
-        }
-        val w = bounds.outWidth
-        val h = bounds.outHeight
-        if (w <= 0 || h <= 0) return null
-        var sample = 1
-        while (w / (sample * 2) >= QR_DECODE_MAX_PX && h / (sample * 2) >= QR_DECODE_MAX_PX) {
-            sample *= 2
-        }
-        val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
-        val bitmap = contentResolver.openInputStream(uri)
-            ?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
-            ?: return null
-        return try {
-            QrImage.decode(bitmap)
-        } finally {
-            bitmap.recycle()
-        }
-    }
-
-    /** 二维码解析成功：带码直连。配对码顺手存起来，下次重启仍生效 */
-    private fun connectViaQr(payload: QrPair.Payload) {
-        if (isFinishing) return
-        val code = payload.pairCode
-        if (code != null) {
-            prefs().edit().putString(KEY_PAIR_CODE, code).apply()
-            TransferManager.setPairCode(code)
-        }
-        TransferManager.stop()
-        TransferManager.setP2pNetwork(null)
-        unbindProcessNetwork()
-        // 局域网/转发链路 RTT 远大于 P2P（如模拟器 adb 转发），放宽单次超时
-        TransferManager.connect(payload.host, payload.port, timeoutMs = 5000)
-        log(getString(R.string.qr_connect_log, payload.host, payload.port))
-        showHint(getString(R.string.qr_connect_hint, payload.host))
-    }
-
-    /**
-     * 对端拒了我们（配对码不对）：弹框让用户填码再连一次。
-     *
-     * 不用 Toast 而用输入框：这是唯一能继续往下走的动作，
-     * 用户看到提示却没法输入的话，只能重新点一遍设备。
-     */
-    private fun showPairCodePrompt(reason: String) {
-        if (isFinishing) return
-        val density = resources.displayMetrics.density
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            val pad = (20 * density).toInt()
-            setPadding(pad, pad / 2, pad, 0)
-        }
-        val input = EditText(this).apply {
-            hint = getString(R.string.pair_code_input_hint)
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            filters = arrayOf(android.text.InputFilter.LengthFilter(4))
-            setSingleLine(true)
-        }
-        container.addView(input)
-
-        val body = getString(
-            R.string.pair_code_prompt_body,
-            reason.ifBlank { getString(R.string.pair_code_prompt_fallback) }
-        )
-
-        AppDialog.builder(this)
-            .setTitle(R.string.pair_code_prompt_title)
-            .setMessage(body)
-            .setView(container)
-            .setPositiveButton(R.string.pair_code_connect) { _, _ ->
-                val code = input.text.toString().trim()
-                if (code.length != 4) {
-                    toast(getString(R.string.pair_code_invalid))
-                    return@setPositiveButton
-                }
-                if (!TransferManager.retryWithPairCode(code)) {
-                    toast(getString(R.string.channel_not_ready))
-                }
-            }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
-    }
-
     /** 最近发送过的文件：点一下直接重新入队 */
     private fun showSendHistory() {
         val entries = SendHistory.recent(this)
@@ -1257,7 +1061,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         controller.onShakeServiceFound = { instance, device ->
-            onShakePeerFound(instance, device)
+            shake.onShakePeerFound(instance, device)
         }
 
         controller.onDiscoveryChanged = { discovering ->
@@ -1269,223 +1073,6 @@ class MainActivity : AppCompatActivity() {
             refreshBackgroundField()
         }
     }
-
-    // ------------------------------------------------------------ 摇一摇配对
-
-    /**
-     * 摇一摇配对。
-     *
-     * 做什么：摇一下 → 把自己的「口令」通过 Wi-Fi Direct 服务发现广播出去，
-     * 同时找别人广播的口令；口令对得上（说明两边几乎同时摇的）就算配对成功，
-     * 由标识较大的一台发起连接，另一台等邀请。
-     *
-     * 为什么这么设计：
-     * - 组网之前两台设备没有 IP 通路，服务发现的实例名是唯一能带自定义文本的官方通道；
-     * - 口令按 1.2 秒分桶、允许相邻桶，两边各自摇自己的，不需要对表也不需要联网；
-     * - 一个人摇不会连上任何东西 —— 没有对端的口令，本机什么也不做。
-     */
-    private fun beginShakePairing() {
-        if (isFinishing || !requestPermissionIfNeeded()) return
-        if (!controller.isSupported) return
-        if (p2pConnected) {
-            showHint(getString(R.string.shake_pair_connected))
-            return
-        }
-        if (connecting) {
-            log("正在连接中，摇一摇先等一等")
-            return
-        }
-        val now = SystemClock.elapsedRealtime()
-        // 已经在配对窗口里就不重复触发：摇得越猛，广播越不该反复重建
-        if (now < shakeUntil) return
-
-        shakeUntil = now + SHAKE_WINDOW_MS
-        shakeMatched = false
-        shakeToken = ShakeToken.token(System.currentTimeMillis())
-        if (shakeSelfId.isEmpty()) shakeSelfId = ShakeToken.deviceId(deviceRawId())
-        val instance = ShakeToken.instance(shakeToken, shakeSelfId)
-        controller.startShakeService(instance)
-
-        flowBackground.burst()
-        mascot.setMood(MascotView.MOOD_HAPPY)
-        mascot.say(getString(R.string.shake_pair_say))
-        tvP2pState.hapticSuccess()
-        showHint(getString(R.string.shake_pair_searching))
-        log("摇一摇配对：口令 $shakeToken，等待同样在摇的手机…")
-
-        uiHandler.removeCallbacks(shakeTimeout)
-        uiHandler.postDelayed(shakeTimeout, SHAKE_WINDOW_MS)
-        uiHandler.removeCallbacks(shakeNudge)
-        uiHandler.postDelayed(shakeNudge, SHAKE_NUDGE_MS)
-    }
-
-    /**
-     * 配对窗口过半还没消息时的一句话。
-     *
-     * 服务发现在模拟器上经常要十秒才回来，光看「配对中」很容易以为卡死了；
-     * 这里只是补充提示，不改变窗口，也不影响后面的匹配。
-     */
-    private val shakeNudge = Runnable {
-        if (shakeMatched || shakeUntil == 0L) return@Runnable
-        showHint(getString(R.string.shake_pair_nudge))
-    }
-
-    /** 听到某个对端的摇一摇广播。口令匹配才继续，其余一律忽略 */
-    private fun onShakePeerFound(instance: String, device: WifiP2pDevice?) {
-        val parsed = ShakeToken.parse(instance) ?: return
-        val (peerToken, peerId) = parsed
-        // 自己广播的回声（部分 ROM 会把本地服务也报上来）
-        if (peerId == shakeSelfId) return
-        // 我们没在摇：对方在摇，但按约定要两边都摇才算配对
-        if (shakeUntil == 0L) return
-        if (!ShakeToken.matches(shakeToken, peerToken)) {
-            log("摇一摇：听到一个口令不匹配的广播，忽略")
-            return
-        }
-        if (shakeMatched) return
-        shakeMatched = true
-
-        uiHandler.removeCallbacks(shakeTimeout)
-        uiHandler.removeCallbacks(shakeNudge)
-        shakeUntil = 0L
-        // 先把服务发现收掉：它和 connect 会抢系统的 P2P 状态机
-        controller.stopShakeService()
-
-        flowBackground.burst()
-        mascot.setMood(MascotView.MOOD_HAPPY)
-        mascot.say(getString(R.string.shake_pair_matched_say))
-        tvP2pState.hapticSuccess()
-        showHint(getString(R.string.shake_pair_matched), HintKind.SUCCESS)
-        log("摇一摇配对成功：口令 $peerToken")
-        // 第二波冲击波晚一点，像两颗心撞上之后的余震
-        uiHandler.postDelayed({ flowBackground.burst(0xFF60A5FA.toInt()) }, 420L)
-
-        if (device == null) {
-            log("没拿到对端设备信息，等对方来邀")
-            return
-        }
-
-        // 收掉服务发现后系统还要一小会儿才回到空闲，立刻 connect 常常被判 BUSY，
-        // 表现就是「配对成功了但一直连不上」。所以先错开 600ms 再发。
-        val inviter = ShakeToken.shouldInvite(shakeSelfId, peerId)
-        val delay = if (inviter) SHAKE_CONNECT_DELAY_MS else SHAKE_WAIT_BEFORE_RETRY_MS
-        log(
-            if (inviter) "由本机发起连接（${displayName(device)}）"
-            else "等对方发起连接…"
-        )
-        shakeInvite?.let { uiHandler.removeCallbacks(it) }
-        var attempt = 0
-        val task = object : Runnable {
-            override fun run() {
-                shakeInvite = null
-                if (p2pConnected) return
-                if (connecting) {
-                    // 上一次还在协商：稍后再看，别硬挤
-                    shakeInvite = this
-                    uiHandler.postDelayed(this, SHAKE_INVITE_RETRY_MS)
-                    return
-                }
-                if (attempt == 0) {
-                    log(if (inviter) "开始发起连接" else "等对方发起连接…")
-                } else {
-                    log(
-                        if (inviter) "对方还没接上，再邀请一次（第 ${attempt + 1} 次）"
-                        else "对方还没动静，这次由本机试一下"
-                    )
-                }
-                connectShakePeer(device)
-
-                // 对端可能正忙着做服务发现（此时它收不到邀请），
-                // 所以邀请要隔几秒重来一次，直到对面腾出手来。
-                attempt++
-                if (attempt < SHAKE_INVITE_TRIES) {
-                    shakeInvite = this
-                    uiHandler.postDelayed(this, SHAKE_INVITE_RETRY_MS)
-                }
-            }
-        }
-        shakeInvite = task
-        uiHandler.postDelayed(task, delay)
-    }
-
-    /**
-     * 摇一摇配对成功后的连接。
-     *
-     * 服务发现回调给的设备对象**不一定在系统的设备缓存里**——直接 connect 会被
-     * 系统当「未知设备」丢弃，日志里是「连接失败：内部错误」。所以先拉一次设备列表：
-     * 对方在就用列表里的对象连；不在就短暂开一次搜索把缓存填上，再试几次。
-     */
-    private fun connectShakePeer(target: WifiP2pDevice, attempt: Int = 0) {
-        if (p2pConnected) return
-        // 每次都补一发搜索：服务发现期间系统的设备搜索是停着的，
-        // 缓存里没有对方的话 connect 会被直接丢弃（Dropping connect request）
-        controller.startDiscovery()
-        controller.requestPeersOnce { peers ->
-            if (p2pConnected || connecting) return@requestPeersOnce
-            val found = peers.firstOrNull {
-                it.deviceAddress.equals(target.deviceAddress, ignoreCase = true)
-            }
-            if (found != null) {
-                onDeviceClicked(found)
-            } else if (attempt >= SHAKE_PEER_WAIT_TRIES) {
-                log("设备列表一直没刷出对方，改用服务发现给的信息直接连")
-                onDeviceClicked(target)
-            } else {
-                log("等系统刷新出对方再连（第 ${attempt + 1} 次）")
-                uiHandler.postDelayed({ connectShakePeer(target, attempt + 1) }, SHAKE_PEER_WAIT_MS)
-            }
-        }
-    }
-
-    private val shakeTimeout = Runnable {
-        if (shakeMatched || shakeUntil == 0L) return@Runnable
-        uiHandler.removeCallbacks(shakeNudge)
-        endShakePairing()
-        mascot.setMood(MascotView.MOOD_IDLE)
-        mascot.say(getString(R.string.shake_pair_say))
-        showHint(getString(R.string.shake_pair_timeout))
-        log("摇一摇：窗口结束，没找到同样在摇的手机")
-    }
-
-    private fun endShakePairing() {
-        shakeUntil = 0L
-        uiHandler.removeCallbacks(shakeTimeout)
-        uiHandler.removeCallbacks(shakeNudge)
-        controller.stopShakeService()
-    }
-
-    /**
-     * 开始听加速度计。
-     *
-     * 只在界面可见时听：摇一摇是个「当面」动作，退到后台还监听纯属浪费电。
-     */
-    private fun startShakeListening() {
-        if (shakeListening) return
-        val mgr = getSystemService(SensorManager::class.java) ?: return
-        val sensor = mgr.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-        if (sensor == null) {
-            log("本机没有加速度计，摇一摇不可用（可用右上角菜单手动触发）")
-            return
-        }
-        sensorManager = mgr
-        shakeDetector.reset()
-        runCatching {
-            mgr.registerListener(shakeListener, sensor, SensorManager.SENSOR_DELAY_GAME)
-        }.onSuccess { shakeListening = true }
-            .onFailure { log("加速度计注册失败：${it.message}") }
-    }
-
-    private fun stopShakeListening() {
-        if (!shakeListening) return
-        runCatching { sensorManager?.unregisterListener(shakeListener) }
-        shakeListening = false
-        shakeDetector.reset()
-    }
-
-    /** ANDROID_ID：同一台设备稳定、不同设备不同，用来生成摇一摇的标识 */
-    private fun deviceRawId(): String? = runCatching {
-        Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
-    }.getOrNull()
 
     // ------------------------------------------------------------------ 权限
 
@@ -1528,7 +1115,7 @@ class MainActivity : AppCompatActivity() {
         shouldShowRequestPermissionRationale(it)
     }
 
-    private fun requestPermissionIfNeeded(): Boolean {
+    internal fun requestPermissionIfNeeded(): Boolean {
         if (hasNearbyPermission()) return true
         if (permissionRequestInFlight) return false
         if (!permissionAsked || shouldShowRationale()) {
@@ -1629,7 +1216,7 @@ class MainActivity : AppCompatActivity() {
         controller.startDiscovery()
     }
 
-    private fun onDeviceClicked(device: WifiP2pDevice) {
+    internal fun onDeviceClicked(device: WifiP2pDevice) {
         if (!requestPermissionIfNeeded()) return
         if (connecting) {
             log("正在连接中，请稍候…")
@@ -1659,8 +1246,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun onConnected(info: WifiP2pInfo) {
         p2pConnected = true
-        shakeInvite?.let { uiHandler.removeCallbacks(it) }
-        shakeInvite = null
+        shake.cancelInvite()
         connecting = false
         uiHandler.removeCallbacks(connectingTimeout)
         adapter.setConnecting(null)
@@ -1811,7 +1397,7 @@ class MainActivity : AppCompatActivity() {
      * 已死（或不存在局域网路由）的 P2P 网络里，连 10.0.2.2 / 局域网 IP
      * 都会失败。这里无条件绑回系统默认网络。
      */
-    private fun unbindProcessNetwork() {
+    internal fun unbindProcessNetwork() {
         if (Build.VERSION.SDK_INT < 29) return
         val cm = getSystemService(ConnectivityManager::class.java) ?: return
         runCatching { cm.bindProcessToNetwork(null) }
@@ -1836,23 +1422,13 @@ class MainActivity : AppCompatActivity() {
     private fun connectLan(raw: String) {
         val text = raw.trim()
         if (text.isEmpty()) return
-        val (host, port) = parseHostPort(text)
+        val (host, port) = HostPort.parse(text, TransferManager.port)
         TransferManager.stop()
         TransferManager.setP2pNetwork(null)
         unbindProcessNetwork()
         // 局域网/转发链路 RTT 远大于 P2P（如模拟器 adb 转发），放宽单次超时
         TransferManager.connect(host, port, timeoutMs = 5000)
         log("局域网直连 $host:$port")
-    }
-
-    /** 支持 `1.2.3.4` 和 `1.2.3.4:8988` 两种写法 */
-    private fun parseHostPort(text: String): Pair<String, Int> {
-        val parts = text.split(":")
-        return if (parts.size >= 2) {
-            parts[0] to (parts[1].toIntOrNull() ?: TransferManager.port)
-        } else {
-            text to TransferManager.port
-        }
     }
 
     private fun showManualConnectDialog() {
@@ -1868,7 +1444,7 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton(R.string.dialog_connect) { _, _ ->
                 val text = input.text.toString().trim()
                 if (text.isEmpty()) return@setPositiveButton
-                val (host, port) = parseHostPort(text)
+                val (host, port) = HostPort.parse(text, TransferManager.port)
                 TransferManager.stop()
                 // 调试通道走的是 loopback / adb 转发，不属于 P2P 网络，
                 // 绑着 P2P 网络反而连不通，这里先解绑
@@ -2231,10 +1807,8 @@ class MainActivity : AppCompatActivity() {
             if (isFinishing || isDestroyed) return@postDelayed
             when (action) {
                 WidgetActions.SEND -> pickFile()
-                WidgetActions.SCAN -> pickQrImage.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                )
-                WidgetActions.PAIR -> showQrPairDialog()
+                WidgetActions.SCAN -> qrPair.launchScan()
+                WidgetActions.PAIR -> qrPair.showQrDialog()
             }
         }, 600L)
     }
@@ -2298,7 +1872,7 @@ class MainActivity : AppCompatActivity() {
         toast(getString(R.string.game_ask_restored_toast))
     }
 
-    private fun prefs() = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+    internal fun prefs() = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
 
     /** 弹出传输小游戏窗口，并把后续进度/完成回调桥接给它 */
     private fun showTransferGame(fileName: String) {
@@ -2341,7 +1915,7 @@ class MainActivity : AppCompatActivity() {
         // 背景切到「单向流动」，光晕亮度跟着进度走
         flowBackground.setTransferIntensity(progress)
         refreshBackgroundField()
-        val suffix = speedSuffix(speed, TransferManager.receivingTotalBytes, progress)
+        val suffix = TransferEta.speedSuffix(this, speed, TransferManager.receivingTotalBytes, progress)
         tvTransferState.text = if (suffix.isEmpty()) {
             getString(R.string.transfer_receiving, name, percent)
         } else {
@@ -2384,45 +1958,13 @@ class MainActivity : AppCompatActivity() {
         flowBackground.setAccent(COLOR_ACCENT_TRANSFER, 0.26f)
         flowBackground.setTransferIntensity(progress)
         refreshBackgroundField()
-        val suffix = speedSuffix(speed, TransferManager.sendingTotalBytes, progress)
+        val suffix = TransferEta.speedSuffix(this, speed, TransferManager.sendingTotalBytes, progress)
         tvTransferState.text = if (suffix.isEmpty()) {
             getString(R.string.transfer_sending, pendingName, percent)
         } else {
             getString(R.string.transfer_sending_speed, pendingName, percent, suffix)
         }
         updateTransferUi()
-    }
-
-    /**
-     * 「2.4 MB/s · 剩 8 秒」这样的后缀。
-     *
-     * 速度还没采到样本、或者总量未知（SAF 不给 SIZE）时返回空串，
-     * 调用方就退回不带速度的文案，而不是显示 `-- /s` 这种废信息。
-     */
-    private fun speedSuffix(speed: Long, totalBytes: Long, progress: Float): String {
-        if (speed <= 0L) return ""
-        val remaining = (totalBytes * (1f - progress.coerceIn(0f, 1f))).toLong()
-        return if (remaining > 0L && totalBytes > 0L) {
-            getString(
-                R.string.transfer_speed_eta,
-                Formatters.speed(speed),
-                Formatters.duration(remaining / speed)
-            )
-        } else {
-            getString(R.string.transfer_speed_only, Formatters.speed(speed))
-        }
-    }
-
-    /**
-     * 估算剩余秒数，供桌面小组件显示。
-     *
-     * 速度还没采到样本、或总量未知（SAF 不给 SIZE）时返回 0，
-     * 卡片那边就不会硬凑出一个「剩 -- 秒」。
-     */
-    private fun etaSeconds(speed: Long, totalBytes: Long, progress: Float): Long {
-        if (speed <= 0L || totalBytes <= 0L) return 0L
-        val remaining = (totalBytes * (1f - progress.coerceIn(0f, 1f))).toLong()
-        return if (remaining > 0L) remaining / speed else 0L
     }
 
     private fun renderSendDone(ok: Boolean) {
@@ -2491,16 +2033,16 @@ class MainActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------------ 工具
 
-    private fun displayName(device: WifiP2pDevice): String =
+    internal fun displayName(device: WifiP2pDevice): String =
         device.deviceName.ifBlank { device.deviceAddress.ifBlank { "未知设备" } }
 
     /** 统一走内联提示条；真机上离屏时（比如正在跳转）退回 Toast 保证不丢信息 */
-    private fun toast(message: String) {
+    internal fun toast(message: String) {
         if (isFinishing || tvHint == null) return
         showHint(message)
     }
 
-    private fun log(message: String) {
+    internal fun log(message: String) {
         logLines.addLast("${timeFormatter.format(Date())}  $message")
         while (logLines.size > MAX_LOG_LINES) logLines.removeFirst()
         tvLog.text = logLines.joinToString("\n")
@@ -2567,11 +2109,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private companion object {
+    internal companion object {
         const val KEY_PERMISSION_ASKED = "permission_asked"
-
-        /** 二维码识别时的位图上限边长：够识别，又不至于把大图整张解出来 */
-        const val QR_DECODE_MAX_PX = 1400
 
         /** 传输历史弹窗最多列几条（再多屏幕放不下、也点不过来） */
         const val TRANSFER_LOG_SHOWN = 30
@@ -2601,31 +2140,6 @@ class MainActivity : AppCompatActivity() {
 
         /** 「要不要给小组件开放大致位置」是否已经问过（只问一次） */
         const val KEY_WEATHER_LOC_ASKED = "weather_location_asked"
-
-        /**
-         * 摇一摇的配对窗口。
-         *
-         * 定 20 秒是因为服务发现的响应可能很慢（模拟器上实测要 11 秒才回来）。
-         * 真机上通常两三秒就配对成功，这 20 秒只是兜底，不会真的等满。
-         */
-        const val SHAKE_WINDOW_MS = 20_000L
-
-        /** 窗口过半时补一句提示，避免「一直在配对中」看起来像卡死 */
-        const val SHAKE_NUDGE_MS = 8_000L
-
-        /** 配对成功后延迟多久再发起连接：让系统从服务发现里收尾，否则 connect 会被判忙 */
-        const val SHAKE_CONNECT_DELAY_MS = 1_200L
-
-        /** 等待方等多久还没被邀就连过去：只是兜底，正常路径上根本走不到 */
-        const val SHAKE_WAIT_BEFORE_RETRY_MS = 4_500L
-
-        /** 等系统把对方刷进设备缓存的间隔与次数（连接前必须让对方「可连接」） */
-        const val SHAKE_PEER_WAIT_MS = 1_500L
-        const val SHAKE_PEER_WAIT_TRIES = 6
-
-        /** 邀请重试间隔与次数：对端在服务发现期间收不到邀请，只能隔一会儿再来 */
-        const val SHAKE_INVITE_RETRY_MS = 1_200L
-        const val SHAKE_INVITE_TRIES = 14
 
         /** 通道报错后等这么久再提示：留出「自动重试成功」的窗口，避免刚连上就喊失败 */
         const val CHANNEL_ERROR_SETTLE_MS = 1800L

@@ -68,7 +68,11 @@ CI：`.github/workflows/android.yml` 在每次 push / PR 时跑单测 + 编译 d
 
 | 路径 | 说明 |
 | --- | --- |
-| `app/src/main/java/com/example/myzuoye/MainActivity.kt` | 主界面、权限流程、状态展示 |
+| `app/src/main/java/com/example/myzuoye/MainActivity.kt` | 主界面、权限流程、状态展示（摇一摇与二维码配对已拆出） |
+| `app/src/main/java/com/example/myzuoye/shake/ShakePairing.kt` | 摇一摇配对功能块：加速度计、口令广播、匹配、邀请重试 |
+| `app/src/main/java/com/example/myzuoye/pair/QrPairFlow.kt` | 二维码配对功能块：展示二维码 / 相册扫码 / 配对码重试 |
+| `app/src/main/java/com/example/myzuoye/util/TransferEta.kt` | 传输速度后缀与剩余秒数估算（小组件用） |
+| `app/src/main/java/com/example/myzuoye/net/HostPort.kt` | 「地址:端口」文本解析 |
 | `app/src/main/java/com/example/myzuoye/p2p/P2pController.kt` | Wi-Fi Direct 控制层：搜索 / 连接 / 建组 / 取组主地址 |
 | `app/src/main/java/com/example/myzuoye/p2p/WifiDirectReceiver.kt` | 系统广播接收与翻译 |
 | `app/src/main/java/com/example/myzuoye/ui/DeviceAdapter.kt` | 附近设备列表 |
