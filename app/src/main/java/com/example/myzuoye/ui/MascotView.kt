@@ -22,13 +22,19 @@ import kotlin.math.sin
  * Q 版人物形象组件：显示圆角贴纸风格的 Q 版猫耳女仆图片，点击有简单互动。
  *
  * 交互：
- * - 点击：人物弹跳一下（缩放动画），随机切到另一个表情，并弹出气泡文字；
+ * - 点击：人物弹跳一下（缩放动画），随机切到另一个表情，并弹出配套的气泡文字；
  * - 传输中 / 传输结束：由调用方通过 [setMood] 切换表情并提示。
  *
- * 三种表情：
- * - [MOOD_IDLE]  无语（默认，平时）
- * - [MOOD_HAPPY] 开心（传输完成）
- * - [MOOD_ANGRY] 生气（传输失败）
+ * 表情库（同一角色的不同贴纸，见 drawable-nodpi/mascot_*.png）：
+ * - [MOOD_IDLE]      无语（默认，平时）
+ * - [MOOD_HAPPY]     开心（收到文件、日常戳一戳）
+ * - [MOOD_ANGRY]     生气（传输失败）
+ * - [MOOD_SURPRISED] 惊讶（被敲一敲、开始摇一摇）
+ * - [MOOD_SHY]       害羞（摇一摇配对成功）
+ * - [MOOD_SLEEPY]    困（戳出来的，卖个萌）
+ * - [MOOD_SMUG]      得意（戳出来的）
+ * - [MOOD_SAD]       委屈（戳出来的）
+ * - [MOOD_CHEER]     欢呼（传输完成）
  *
  * 气泡排版（[layoutBubble]）：
  * 气泡画在人物上方的独立区域，宽度受控件宽度限制。文字先按宽度自动折行，
@@ -45,6 +51,31 @@ class MascotView @JvmOverloads constructor(
         const val MOOD_IDLE = 0
         const val MOOD_HAPPY = 1
         const val MOOD_ANGRY = 2
+        const val MOOD_SURPRISED = 3
+        const val MOOD_SHY = 4
+        const val MOOD_SLEEPY = 5
+        const val MOOD_SMUG = 6
+        const val MOOD_SAD = 7
+        const val MOOD_CHEER = 8
+
+        /** 表情 → 贴纸资源。加新表情只改这一处 */
+        fun drawableForMood(mood: Int): Int = when (mood) {
+            MOOD_HAPPY -> R.drawable.mascot_happy
+            MOOD_ANGRY -> R.drawable.mascot_angry
+            MOOD_SURPRISED -> R.drawable.mascot_surprised
+            MOOD_SHY -> R.drawable.mascot_shy
+            MOOD_SLEEPY -> R.drawable.mascot_sleepy
+            MOOD_SMUG -> R.drawable.mascot_smug
+            MOOD_SAD -> R.drawable.mascot_sad
+            MOOD_CHEER -> R.drawable.mascot_cheer
+            else -> R.drawable.mascot_idle
+        }
+
+        /** 所有表情，供「表情库」预览按顺序展示 */
+        val ALL_MOODS = intArrayOf(
+            MOOD_IDLE, MOOD_HAPPY, MOOD_CHEER, MOOD_SURPRISED,
+            MOOD_SHY, MOOD_SMUG, MOOD_SLEEPY, MOOD_SAD, MOOD_ANGRY
+        )
 
         /** 气泡字号（dp）与缩放下限 */
         private const val BASE_TEXT_DP = 21f
@@ -55,6 +86,23 @@ class MascotView @JvmOverloads constructor(
 
         /** 缩到最小字号还放不下时的硬上限 */
         private const val MAX_LINES = 3
+
+        /** 点击时随机切换的表情：只放「适合被戳」的几个，失败/传输中的表情不参与 */
+        private val TAP_MOODS = intArrayOf(
+            MOOD_HAPPY, MOOD_CHEER, MOOD_SURPRISED,
+            MOOD_SHY, MOOD_SMUG, MOOD_SLEEPY, MOOD_SAD
+        )
+
+        /** 每种表情对应的戳一戳台词，和表情语义对上，不再随机串味 */
+        private fun tapLinesFor(mood: Int): Array<String> = when (mood) {
+            MOOD_SURPRISED -> arrayOf("欸？！", "吓我一跳！", "怎、怎么了？")
+            MOOD_SHY -> arrayOf("别、别戳啦…", "脸有点热…", "真是的…")
+            MOOD_SLEEPY -> arrayOf("困了…眯一会儿", "哈欠…", "再让我睡五分钟")
+            MOOD_SMUG -> arrayOf("这点小事难不倒我", "哼哼~", "夸我一下嘛")
+            MOOD_SAD -> arrayOf("呜呜…", "有点委屈", "不理你了")
+            MOOD_CHEER -> arrayOf("耶！", "今天也超顺利~", "给我点个赞")
+            else -> arrayOf("喵~", "在呢在呢", "戳我干嘛", "加油鸭", "文件传好了吗", "今天也要元气满满")
+        }
 
         /** 完成/失败台词：随机抽一条，连续传几个文件不会每次都一样 */
         private val DONE_LINES = arrayOf(
@@ -193,16 +241,9 @@ class MascotView @JvmOverloads constructor(
         super.onDetachedFromWindow()
     }
 
-    private val idleLines = arrayOf(
-        "喵~", "在呢在呢", "戳我干嘛", "加油鸭", "文件传好了吗", "今天也要元气满满"
-    )
-
+    /** 按当前表情解码贴纸；换表情时回收旧图 */
     private fun loadBitmap() {
-        val res = when (mood) {
-            MOOD_HAPPY -> R.drawable.mascot_happy
-            MOOD_ANGRY -> R.drawable.mascot_angry
-            else -> R.drawable.mascot_idle
-        }
+        val res = drawableForMood(mood)
         // 回收旧图避免内存泄漏
         val old = bitmap
         bitmap = BitmapFactory.decodeResource(resources, res)
@@ -443,9 +484,12 @@ class MascotView @JvmOverloads constructor(
         if (transferring) {
             showBubble("传输中，稍等一下~")
         } else {
-            showBubble(idleLines.random())
-            mood = if (mood == MOOD_IDLE) MOOD_HAPPY else MOOD_IDLE
+            // 每次戳都换一个新表情（排除当前这张），台词跟着表情走
+            val candidates = TAP_MOODS.filter { it != mood }
+            val next = if (candidates.isEmpty()) MOOD_HAPPY else candidates.random()
+            mood = next
             loadBitmap()
+            showBubble(tapLinesFor(next).random())
             invalidate()
         }
     }
@@ -512,10 +556,10 @@ class MascotView @JvmOverloads constructor(
         showBubble("开始传输啦~")
     }
 
-    /** 传输完成提醒：台词随机，连续传几个文件不会每次都一样 */
+    /** 传输完成提醒：欢呼表情 + 随机台词，连续传几个文件不会每次都一样 */
     fun showDone() {
         setTransferring(false)
-        setMood(MOOD_HAPPY)
+        setMood(MOOD_CHEER)
         showBubble(DONE_LINES.random())
     }
 
@@ -527,13 +571,13 @@ class MascotView @JvmOverloads constructor(
     }
 
     /**
-     * 被对方「敲」到：整个人往上弹一下，再说一句。
+     * 被对方「敲」到：吓一跳的表情 + 整个人往上弹一下，再说一句。
      *
      * 只动 translationY，不碰布局参数——和 [Interactions.shake] 同一个思路，
      * 不会触发重新测量，也不会移动点击热区。系统关了动画就只说话不弹跳。
      */
     fun showKnock() {
-        setMood(MOOD_HAPPY)
+        setMood(MOOD_SURPRISED)
         showBubble(KNOCK_LINES.random())
         if (animationsOff) return
 
@@ -551,5 +595,17 @@ class MascotView @JvmOverloads constructor(
                     .start()
             }
             .start()
+    }
+
+    /** 摇一摇配上人：害羞地应一声（台词由调用方给，保持与配对文案一致） */
+    fun showShy(line: String? = null) {
+        setMood(MOOD_SHY)
+        if (!line.isNullOrBlank()) showBubble(line)
+    }
+
+    /** 被摇一摇「招呼」到：好奇/惊讶（台词由调用方给） */
+    fun showCurious(line: String? = null) {
+        setMood(MOOD_SURPRISED)
+        if (!line.isNullOrBlank()) showBubble(line)
     }
 }

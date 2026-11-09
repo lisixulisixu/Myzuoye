@@ -21,3 +21,6 @@ keystore.properties
 
 # IDE
 /.idea/
+
+# 表情图的原始生成稿（6MB+），成品已处理进 res/drawable-nodpi，不放仓库
+.artwork/

@@ -214,9 +214,16 @@ object TransferCardRenderer {
     }
 
     private fun drawMascots(canvas: Canvas, context: Context, data: CardData) {
-        // 左边是对方（呆滞脸），右边是本机（开心脸）：同样的贴纸重复两次会像复制粘贴
-        val left = loadMascot(context, R.drawable.mascot_idle)
-        val right = loadMascot(context, R.drawable.mascot_happy)
+        // 两边表情跟着方向走：发出去时本机欢呼、对方一脸惊讶；
+        // 收进来时本机开心、对方是平时那张 —— 比两张一样的贴纸更像「两个人在场」
+        val left = loadMascot(
+            context,
+            if (data.fromMe) R.drawable.mascot_surprised else R.drawable.mascot_idle
+        )
+        val right = loadMascot(
+            context,
+            if (data.fromMe) R.drawable.mascot_cheer else R.drawable.mascot_happy
+        )
 
         // 贴纸尺寸与位置：两人之间留出 290px 的空当给虚线和徽章，
         // 顶部压在统计行下方（数值基线 828），不遮任何数字

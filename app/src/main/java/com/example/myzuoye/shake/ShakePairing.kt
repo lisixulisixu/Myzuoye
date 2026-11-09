@@ -89,8 +89,8 @@ internal class ShakePairing(private val host: MainActivity) {
         host.controller.startShakeService(instance)
 
         host.flowBackground.burst()
-        host.mascot.setMood(MascotView.MOOD_HAPPY)
-        host.mascot.say(host.getString(R.string.shake_pair_say))
+        // 开始找人：好奇又期待的表情（惊讶脸）
+        host.mascot.showCurious(host.getString(R.string.shake_pair_say))
         host.tvP2pState.hapticSuccess()
         host.showHint(host.getString(R.string.shake_pair_searching))
         host.log("摇一摇配对：口令 $shakeToken，等待同样在摇的手机…")
@@ -123,8 +123,8 @@ internal class ShakePairing(private val host: MainActivity) {
         host.controller.stopShakeService()
 
         host.flowBackground.burst()
-        host.mascot.setMood(MascotView.MOOD_HAPPY)
-        host.mascot.say(host.getString(R.string.shake_pair_matched_say))
+        // 配对成功：害羞
+        host.mascot.showShy(host.getString(R.string.shake_pair_matched_say))
         host.tvP2pState.hapticSuccess()
         host.showHint(host.getString(R.string.shake_pair_matched), MainActivity.HintKind.SUCCESS)
         host.log("摇一摇配对成功：口令 $peerToken")

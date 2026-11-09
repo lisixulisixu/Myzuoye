@@ -65,6 +65,7 @@ import com.example.myzuoye.ui.attachScrollDepth
 import com.example.myzuoye.ui.hapticError
 import com.example.myzuoye.ui.hapticSuccess
 import com.example.myzuoye.ui.shake
+import com.example.myzuoye.ui.MascotGallery
 import com.example.myzuoye.ui.MascotView
 import com.example.myzuoye.ui.RadarScanView
 import com.example.myzuoye.ui.TransferCardSheet
@@ -736,6 +737,7 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.send_history),
             getString(R.string.transfer_log),
             getString(R.string.tools_transfer_card),
+            getString(R.string.tools_mascot_gallery),
             getString(
                 R.string.auto_copy_toggle,
                 getString(if (autoCopyEnabled()) R.string.switch_on else R.string.switch_off)
@@ -757,17 +759,18 @@ class MainActivity : AppCompatActivity() {
                     4 -> showSendHistory()
                     5 -> showTransferLog()
                     6 -> showLatestTransferCard()
-                    7 -> {
+                    7 -> MascotGallery.show(this)
+                    8 -> {
                         val enabled = !autoCopyEnabled()
                         setAutoCopyEnabled(enabled)
                         showHint(
                             getString(if (enabled) R.string.auto_copy_on else R.string.auto_copy_off)
                         )
                     }
-                    8 -> togglePairCode()
-                    9 -> pinWidgetToHome()
-                    10 -> exportLog()
-                    11 -> showGesturesDialog()
+                    9 -> togglePairCode()
+                    10 -> pinWidgetToHome()
+                    11 -> exportLog()
+                    12 -> showGesturesDialog()
                     else -> {
                         TransferManager.clearHistory()
                         renderChat()

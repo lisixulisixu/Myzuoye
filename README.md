@@ -74,6 +74,7 @@ CI：`.github/workflows/android.yml` 在每次 push / PR 时跑单测 + 编译 d
 | `app/src/main/java/com/example/myzuoye/util/TransferEta.kt` | 传输速度后缀与剩余秒数估算（小组件用） |
 | `app/src/main/java/com/example/myzuoye/ui/TransferCardRenderer.kt` | 传输卡片离屏绘制（1080×1440） |
 | `app/src/main/java/com/example/myzuoye/ui/TransferCardSheet.kt` | 卡片弹窗：预览、保存到相册、FileProvider 分享 |
+| `app/src/main/java/com/example/myzuoye/ui/MascotGallery.kt` | 小人表情库预览（3×3 网格） |
 | `app/src/main/java/com/example/myzuoye/net/HostPort.kt` | 「地址:端口」文本解析 |
 | `app/src/main/java/com/example/myzuoye/p2p/P2pController.kt` | Wi-Fi Direct 控制层：搜索 / 连接 / 建组 / 取组主地址 |
 | `app/src/main/java/com/example/myzuoye/p2p/WifiDirectReceiver.kt` | 系统广播接收与翻译 |
@@ -306,6 +307,30 @@ adb -s emulator-5554 shell md5sum "/sdcard/Download/WiFi直传/xxx.jpg"
 
 封面右下角的猫耳女仆（`ui/MascotView.kt`），点一下会弹跳、换表情，并在头顶的气泡里说一句话；
 开始传输 / 传输成功 / 传输失败也会自动换表情提示。
+
+### 表情库（9 张贴纸）
+
+同一角色的不同表情，都是 400px 白底贴纸，放在 `res/drawable-nodpi/mascot_*.png`：
+
+| 表情 | 资源 | 什么时候出现 |
+| --- | --- | --- |
+| 平时 | `mascot_idle` | 默认；接收方向卡片上的「对方」 |
+| 开心 | `mascot_happy` | 戳一戳；接收完成卡片上的「本机」 |
+| 欢呼 | `mascot_cheer` | 传输完成（`showDone`） |
+| 惊讶 | `mascot_surprised` | 被对方「敲一敲」；开始摇一摇；发送方向卡片上的「对方」 |
+| 害羞 | `mascot_shy` | 摇一摇配对成功 |
+| 得意 | `mascot_smug` | 戳一戳 |
+| 困了 | `mascot_sleepy` | 戳一戳 |
+| 委屈 | `mascot_sad` | 戳一戳 |
+| 生气 | `mascot_angry` | 传输失败 |
+
+- **戳一戳换表情**：每次点都随机换一张（不会重复当前这张），台词跟着表情走
+  （得意说「这点小事难不倒我」、困了说「再让我睡五分钟」），不再随机串味
+- **表情库预览**：更多操作 →「小人表情库」，3×3 网格看全 9 张
+- **加新表情**：只改 `MascotView.drawableForMood` 一处映射，
+  `MascotMoodTest` 会检查「每个表情都有图、且没有两张表情共用一张图」
+
+### 交互细节
 
 - **气泡排版**：气泡画在人物上方的独立区域，按控件宽度自动折行。两行放不下就逐级缩小字号
   （21dp → 13dp），仍然超长才截断加省略号——任何长度的提示语都不会被控件边缘裁掉
